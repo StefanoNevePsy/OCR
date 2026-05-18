@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f7f4ee">
+<title>Dewarp · raddrizza scansioni di libri</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="page-head">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <h1>Dewarp</h1>
+  </div>
+  <p class="lede">
+    Raddrizza scansioni di libri con piega e angolazioni miste, mantenendo struttura, immagini e ordine. <br>
+    L'output è un PDF con righe orizzontali, pronto per essere evidenziato.
+  </p>
+</header>
+
+<main>
+  <section id="stage-upload" class="stage stage-upload">
+    <form id="upload-form" autocomplete="off">
+      <label class="drop-zone" id="drop-zone" for="file-input">
+        <input id="file-input" name="file" type="file" accept="application/pdf" required hidden>
+        <span class="drop-zone-icon" aria-hidden="true">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 3v5a1 1 0 0 0 1 1h5"/><path d="M6 21a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8l6 6v10a2 2 0 0 1-2 2z"/><path d="M12 12v6"/><path d="M9 15l3-3 3 3"/>
+          </svg>
+        </span>
+        <span class="drop-zone-title" id="drop-zone-title">Trascina un PDF qui</span>
+        <span class="drop-zone-hint" id="drop-zone-hint">oppure clicca per sceglierlo</span>
+      </label>
+
+      <details class="options">
+        <summary>Opzioni avanzate</summary>
+        <div class="options-grid">
+          <label class="check">
+            <input type="checkbox" name="split_two_up" checked>
+            <span>Spezza scansioni a doppia pagina sul gutter</span>
+          </label>
+
+          <label class="check">
+            <input type="checkbox" name="ocr">
+            <span>Aggiungi layer OCR (PDF ricercabile, +1-3 min)</span>
+          </label>
+
+          <label class="select">
+            <span>Lingua OCR</span>
+            <select name="ocr_lang">
+              <option value="ita" selected>Italiano</option>
+              <option value="eng">Inglese</option>
+              <option value="ita+eng">Italiano + Inglese</option>
+            </select>
+          </label>
+
+          <label class="range">
+            <span>Warp sulle figure
+              <em data-out="figure_attenuation">15%</em>
+            </span>
+            <input type="range" name="figure_attenuation" min="0" max="1" step="0.05" value="0.15">
+            <small>0 = lascia figure inalterate · 1 = raddrizza anche le figure</small>
+          </label>
+
+          <label class="range">
+            <span>Limite di spostamento
+              <em data-out="max_displacement_frac">4%</em>
+            </span>
+            <input type="range" name="max_displacement_frac" min="0.01" max="0.10" step="0.005" value="0.04">
+            <small>tetto al displacement verticale, in frazione di altezza pagina</small>
+          </label>
+
+          <label class="range">
+            <span>Grado polinomiale
+              <em data-out="poly_degree">2</em>
+            </span>
+            <input type="range" name="poly_degree" min="1" max="4" step="1" value="2">
+            <small>2 va bene per la maggior parte dei libri; 3-4 per curvature forti</small>
+          </label>
+        </div>
+      </details>
+
+      <button type="submit" id="submit" class="btn-primary" disabled>
+        <span>Raddrizza il PDF</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M13 5l7 7-7 7"/></svg>
+      </button>
+    </form>
+  </section>
+
+  <section id="stage-progress" class="stage stage-progress" hidden>
+    <div class="progress-card">
+      <div class="progress-head">
+        <h2>Elaborazione in corso</h2>
+        <span class="job-id" id="job-id"></span>
+      </div>
+      <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <p class="progress-msg" id="progress-msg">in coda</p>
+      <p class="progress-meta" id="progress-meta"></p>
+    </div>
+  </section>
+
+  <section id="stage-done" class="stage stage-done" hidden>
+    <header class="done-head">
+      <div>
+        <h2>Pronto</h2>
+        <p id="done-stats" class="muted"></p>
+      </div>
+      <div class="done-actions">
+        <a id="download-link" class="btn-primary" download="dewarped.pdf">
+          <span>Scarica PDF</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+        </a>
+        <button id="new-job" class="btn-ghost">Nuovo PDF</button>
+      </div>
+    </header>
+
+    <div class="preview-controls">
+      <span class="muted">Anteprima</span>
+      <div class="toggle" role="tablist" aria-label="prima o dopo">
+        <button type="button" role="tab" data-view="before" aria-selected="false">Prima</button>
+        <button type="button" role="tab" data-view="after" aria-selected="true">Dopo</button>
+        <button type="button" role="tab" data-view="split" aria-selected="false">Affianco</button>
+      </div>
+    </div>
+
+    <div id="previews" class="previews"></div>
+  </section>
+</main>
+
+<footer>
+  <p class="muted">Tutto resta sul tuo dispositivo o server. Nessun upload esterno.</p>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

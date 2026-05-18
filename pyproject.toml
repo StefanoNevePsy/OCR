@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dewarp"
+version = "0.1.0"
+description = "Straighten skewed and warped book scans in PDFs while preserving layout"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "opencv-python-headless>=4.8",
+    "numpy>=1.24",
+    "pymupdf>=1.24",
+    "pillow>=10.0",
+    "img2pdf>=0.5",
+    "pytesseract>=0.3.10",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+dewarp = "dewarp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"dewarp.webapp" = ["static/*"]
