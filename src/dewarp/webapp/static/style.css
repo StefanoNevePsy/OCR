@@ -161,14 +161,31 @@ main {
   justify-content: space-between;
 }
 .options summary::-webkit-details-marker { display: none; }
+.options summary > span:first-child {
+  flex: 1;
+}
 .options summary::after {
   content: "+";
   font-family: var(--serif);
   font-size: 1.25rem;
   color: var(--ink-muted);
   transition: transform .2s;
+  margin-left: 0.5rem;
 }
 .options[open] summary::after { transform: rotate(45deg); }
+.reset-btn {
+  font: inherit;
+  font-size: 0.78rem;
+  background: transparent;
+  border: 1px solid var(--paper-3);
+  color: var(--ink-soft);
+  border-radius: var(--radius-1);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.reset-btn:hover { border-color: var(--ink-muted); color: var(--ink); }
+.reset-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 .options-grid {
   display: grid;

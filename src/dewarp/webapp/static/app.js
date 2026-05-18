@@ -67,6 +67,27 @@ function onFileChange() {
   dzHint.textContent = fmtBytes(f.size);
 }
 
+// ---------- reset opzioni ----------
+// Snapshot dei default presenti nel markup, per ripristinare con un click
+// (utili dopo aver provato valori estremi che producono risultati strani).
+const defaultsByName = {};
+for (const el of form.elements) {
+  if (!el.name) continue;
+  if (el.type === "checkbox") defaultsByName[el.name] = el.checked;
+  else defaultsByName[el.name] = el.value;
+}
+const resetBtn = document.getElementById("reset-options");
+resetBtn.addEventListener("click", (e) => {
+  e.stopPropagation();  // non far chiudere il <details>
+  e.preventDefault();
+  for (const el of form.elements) {
+    if (!(el.name in defaultsByName)) continue;
+    if (el.type === "checkbox") el.checked = defaultsByName[el.name];
+    else el.value = defaultsByName[el.name];
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+});
+
 // ---------- range outputs live ----------
 document.querySelectorAll(".range input[type=range]").forEach(r => {
   const out = document.querySelector(`[data-out="${r.name}"]`);
@@ -148,9 +169,41 @@ function showDone(jobId, status) {
   stageProgress.hidden = true;
   stageDone.hidden = false;
   doneStats.textContent = `${status.pages_src} pagine sorgente · ${status.pages_out} pagine raddrizzate`;
+  // Conserva URL ma intercetta il click: alcune webview (Tauri / WKWebView)
+  // ignorano l'attributo `download` su link verso server locali. Forziamo
+  // il download via fetch + Blob + anchor temporaneo, che funziona ovunque.
+  downloadLink.dataset.url = `/api/jobs/${jobId}/download`;
   downloadLink.href = `/api/jobs/${jobId}/download`;
   renderPreviews(jobId, status.pages_out);
 }
+
+async function triggerDownload(url, filename) {
+  try {
+    downloadLink.setAttribute("aria-busy", "true");
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("download fallito: " + r.status);
+    const blob = await r.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename || "dewarped.pdf";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  } catch (err) {
+    alert("Impossibile scaricare il PDF: " + err.message);
+  } finally {
+    downloadLink.removeAttribute("aria-busy");
+  }
+}
+
+downloadLink.addEventListener("click", (e) => {
+  const url = downloadLink.dataset.url;
+  if (!url) return; // bottone non ancora pronto
+  e.preventDefault();
+  triggerDownload(url, "dewarped.pdf");
+});
 
 function renderPreviews(jobId, n) {
   previewsEl.innerHTML = "";

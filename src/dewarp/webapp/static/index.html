@@ -34,7 +34,10 @@
       </label>
 
       <details class="options">
-        <summary>Opzioni avanzate</summary>
+        <summary>
+          <span>Opzioni avanzate</span>
+          <button type="button" id="reset-options" class="reset-btn" title="Ripristina i valori di default">Reset</button>
+        </summary>
         <div class="options-grid">
           <label class="check">
             <input type="checkbox" name="split_two_up" checked>
@@ -109,7 +112,7 @@
         <p id="done-stats" class="muted"></p>
       </div>
       <div class="done-actions">
-        <a id="download-link" class="btn-primary" download="dewarped.pdf">
+        <a id="download-link" class="btn-primary" href="#" download="dewarped.pdf" role="button">
           <span>Scarica PDF</span>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
         </a>

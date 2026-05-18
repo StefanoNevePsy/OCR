@@ -35,6 +35,9 @@ class DewarpParams:
     hough_max_slope: float = 0.12        # tan(angolo) massimo per considerarla orizzontale
     figure_attenuation: float = 0.15     # 0 = niente warp sulle figure, 1 = warp pieno
     figure_min_area_frac: float = 0.010  # area minima (frazione pagina) per essere figura
+    figure_skip_edges_area_frac: float = 0.18  # figure piu' grandi: bordi NON usati come features
+                                               # (la weight mask le protegge, ma se i bordi entrano
+                                               #  nel fit producono slope estremi al confine)
     gutter_search_frac: float = 0.20     # zona di ricerca del gutter attorno al centro
     gutter_min_contrast: float = 12.0    # contrasto minimo per accettare lo split
     deskew_max_deg: float = 6.0          # rotazione massima cercata
@@ -309,6 +312,10 @@ def _figure_horizontal_edges(gray: np.ndarray, params: DewarpParams) -> list[np.
     for i in range(1, num):
         x, y, cw, ch, area = stats[i]
         if area < params.figure_min_area_frac * page_area:
+            continue
+        # Figure troppo grandi dominano il polynomial fit: i loro bordi non
+        # vengono piu' usati come features. La weight mask le protegge comunque.
+        if area > params.figure_skip_edges_area_frac * page_area:
             continue
         ratio = cw / max(ch, 1)
         if ratio > 12 or cw < w * 0.10:

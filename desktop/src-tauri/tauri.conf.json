@@ -20,6 +20,7 @@
         "resizable": true,
         "decorations": true,
         "fullscreen": false,
+        "dragDropEnabled": false,
         "url": "index.html"
       }
     ],
