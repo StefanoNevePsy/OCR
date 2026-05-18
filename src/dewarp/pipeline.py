@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -25,11 +27,14 @@ class ProcessOptions:
     ocr_lang: str = "ita"
     split_two_up: bool = True
     jpeg_quality: int = 88
+    workers: int = 0  # 0 = auto (min 4, max numero CPU)
     params: DewarpParams = None  # type: ignore[assignment]
 
     def __post_init__(self):
         if self.params is None:
             self.params = DewarpParams()
+        if self.workers <= 0:
+            self.workers = max(1, min(os.cpu_count() or 1, 4))
 
 
 def _ocr_pdf_overlay(image_pdf_path: Path, output_path: Path, lang: str) -> None:
@@ -88,17 +93,34 @@ def process_pdf(
     report(0, n_src, "rendering")
     rendered = list(render_pdf_pages(input_path, dpi=opts.dpi))
 
-    out_images: list[np.ndarray] = []
+    # Costruisce una lista di "tasks" (idx, half) preservando l'ordine.
+    tasks: list[tuple[int, "np.ndarray"]] = []
     for i, page_img in enumerate(rendered):
-        report(i, n_src, f"pagina {i + 1}/{n_src}")
         halves = split_two_up(page_img, opts.params) if opts.split_two_up else [page_img]
         for half in halves:
-            try:
-                fixed = dewarp_page(half, opts.params)
-            except Exception:
-                log.exception("dewarp fallito sulla pagina %d, uso originale", i)
-                fixed = half
-            out_images.append(fixed)
+            tasks.append((i, half))
+
+    out_images: list[np.ndarray | None] = [None] * len(tasks)
+    progress_counter = [0]
+
+    def run_one(args: tuple[int, int, np.ndarray]):
+        slot, src_idx, half = args
+        try:
+            fixed = dewarp_page(half, opts.params)
+        except Exception:
+            log.exception("dewarp fallito sulla pagina %d, uso originale", src_idx)
+            fixed = half
+        out_images[slot] = fixed
+        progress_counter[0] += 1
+        report(progress_counter[0], len(tasks), f"pagina {progress_counter[0]}/{len(tasks)}")
+
+    workers = opts.workers
+    if workers > 1 and len(tasks) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(run_one, [(s, i, h) for s, (i, h) in enumerate(tasks)]))
+    else:
+        for slot, (i, h) in enumerate(tasks):
+            run_one((slot, i, h))
 
     report(n_src, n_src, "scrittura PDF")
     if opts.ocr:

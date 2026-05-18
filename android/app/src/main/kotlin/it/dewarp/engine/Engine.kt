@@ -148,25 +148,38 @@ object Engine {
         Imgproc.resize(gray, small, Size(), scale, scale, Imgproc.INTER_AREA)
         gray.release()
         val binSmall = binarize(small); small.release()
+        val baseScore = rowVariance(binSmall)
 
-        var bestAngle = 0.0
-        var bestScore = rowVariance(binSmall)
-        val step = params.deskewStepDeg
-        val limit = params.deskewMaxDeg
-        var angle = -limit
-        while (angle <= limit + 1e-6) {
-            if (abs(angle) >= 1e-3) {
-                val rot = rotate(binSmall, angle, Scalar(0.0))
-                val s = rowVariance(rot)
-                rot.release()
-                if (s > bestScore) { bestScore = s; bestAngle = angle }
-            }
-            angle += step
+        fun scoreAt(angle: Double): Double {
+            if (abs(angle) < 1e-3) return baseScore
+            val rot = rotate(binSmall, angle, Scalar(0.0))
+            val s = rowVariance(rot)
+            rot.release()
+            return s
         }
+
+        // Coarse-to-fine: passa grossa (~1 deg) poi rifinitura attorno al miglior angolo
+        fun search(center: Double, radius: Double, step: Double): Double {
+            var bestA = center
+            var bestS = scoreAt(center)
+            var a = center - radius
+            while (a <= center + radius + 1e-6) {
+                if (abs(a - center) > 1e-6 && abs(a) >= 1e-3) {
+                    val s = scoreAt(a)
+                    if (s > bestS) { bestS = s; bestA = a }
+                }
+                a += step
+            }
+            return bestA
+        }
+
+        val coarseStep = maxOf(1.0, params.deskewStepDeg * 5)
+        val coarseA = search(0.0, params.deskewMaxDeg, coarseStep)
+        val fineA = search(coarseA, coarseStep, params.deskewStepDeg)
         binSmall.release()
 
-        return if (abs(bestAngle) < 1e-3) Pair(img.clone(), 0.0)
-               else Pair(rotate(img, bestAngle, whiteScalar(img)), bestAngle)
+        return if (abs(fineA) < 1e-3) Pair(img.clone(), 0.0)
+               else Pair(rotate(img, fineA, whiteScalar(img)), fineA)
     }
 
     // ----------------------------- line tracing ---------------------------- //
@@ -197,22 +210,24 @@ object Engine {
             if (cw < w * 0.10) continue
             if (ch > h * 0.25) continue
 
-            // Per ogni colonna del bounding box, calcola y media dei pixel attivi
-            val ys = DoubleArray(w) { Double.NaN }
+            // Una sola chiamata JNI per leggere tutto il bounding box.
             val roi = Mat(labels, Rect(x, y, cw, ch))
+            val flat = IntArray(cw * ch)
+            roi.get(0, 0, flat)
+            roi.release()
+
             val sumsCol = DoubleArray(cw)
             val countsCol = IntArray(cw)
-            val buf = IntArray(cw)
             for (row in 0 until ch) {
-                roi.row(row).get(0, 0, buf)
+                val base = row * cw
                 for (col in 0 until cw) {
-                    if (buf[col] == i) {
+                    if (flat[base + col] == i) {
                         sumsCol[col] += row
                         countsCol[col]++
                     }
                 }
             }
-            roi.release()
+            val ys = DoubleArray(w) { Double.NaN }
             var meanY = 0.0; var cnt = 0
             for (col in 0 until cw) {
                 if (countsCol[col] > 0) {
@@ -285,20 +300,21 @@ object Engine {
             val ysTop = DoubleArray(w) { Double.NaN }
             val ysBot = DoubleArray(w) { Double.NaN }
             val roi = Mat(labels, Rect(x, y, cw, ch))
-            val buf = IntArray(cw)
-            // first row: per ogni colonna, primo y dove label == i
+            val flat = IntArray(cw * ch)
+            roi.get(0, 0, flat)
+            roi.release()
+            // first/last row: per ogni colonna, primo e ultimo y dove label == i
             val firstRow = IntArray(cw) { -1 }
             val lastRow = IntArray(cw) { -1 }
             for (row in 0 until ch) {
-                roi.row(row).get(0, 0, buf)
+                val base = row * cw
                 for (col in 0 until cw) {
-                    if (buf[col] == i) {
+                    if (flat[base + col] == i) {
                         if (firstRow[col] < 0) firstRow[col] = row
                         lastRow[col] = row
                     }
                 }
             }
-            roi.release()
             for (col in 0 until cw) {
                 if (firstRow[col] >= 0) {
                     ysTop[x + col] = (y + firstRow[col]).toDouble()
@@ -421,44 +437,61 @@ object Engine {
         val polysOrdered = Array(nFeats) { polys[order[it]] }
         val targets = DoubleArray(nFeats) { polysOrdered[it].average() }
 
-        // 6. campo di displacement: per ogni colonna, interpola da targets a src_ys (con monotonicita')
-        val mapY = Mat(h, w, CvType.CV_32F)
+        // 6. Costruzione vettorizzata di mapY.
+        //    Lavoro per riga (compatibile col layout di OpenCV) usando solo FloatArray
+        //    e una sola put per riga: H chiamate JNI invece di W.
         val mapX = Mat(h, w, CvType.CV_32F)
-        val mapYRow = FloatArray(w)
-        val mapXRow = FloatArray(w)
-        for (yy in 0 until h) {
-            for (xx in 0 until w) mapXRow[xx] = xx.toFloat()
-            mapX.put(yy, 0, mapXRow)
+        run {
+            val rowBuf = FloatArray(w) { it.toFloat() }
+            for (yy in 0 until h) mapX.put(yy, 0, rowBuf)
         }
 
-        val srcY = DoubleArray(nFeats)
-        val xp = DoubleArray(nFeats + 2)
-        val fp = DoubleArray(nFeats + 2)
-        for (x in 0 until w) {
-            for (k in 0 until nFeats) srcY[k] = polysOrdered[k][x]
-            // enforce monotonia
-            for (k in 1 until nFeats) if (srcY[k] < srcY[k - 1]) srcY[k] = srcY[k - 1]
-            // ancore ai bordi: estrapolazione lineare con la prima/ultima pendenza
-            val anchorTop = if (nFeats >= 2) {
-                val slope = (srcY[1] - srcY[0]) / max(targets[1] - targets[0], 1.0)
-                srcY[0] - targets[0] * slope
-            } else srcY[0]
-            val anchorBot = if (nFeats >= 2) {
-                val slope = (srcY[nFeats - 1] - srcY[nFeats - 2]) / max(targets[nFeats - 1] - targets[nFeats - 2], 1.0)
-                srcY[nFeats - 1] + (h - 1 - targets[nFeats - 1]) * slope
-            } else srcY[nFeats - 1]
-            xp[0] = 0.0; fp[0] = anchorTop
-            for (k in 0 until nFeats) { xp[k + 1] = targets[k]; fp[k + 1] = srcY[k] }
-            xp[nFeats + 1] = (h - 1).toDouble(); fp[nFeats + 1] = anchorBot
-            // ordina xp
-            val idx = (0 until nFeats + 2).sortedBy { xp[it] }
-            val xpS = DoubleArray(nFeats + 2) { xp[idx[it]] }
-            val fpS = DoubleArray(nFeats + 2) { fp[idx[it]] }
-            // interp lineare per y_dst in 0..h-1
-            for (y in 0 until h) {
-                mapYRow[y] = linInterp(y.toDouble(), xpS, fpS).toFloat()
+        // polysOrdered[i] (DoubleArray w) -> FloatArray w, con maximum.accumulate per colonna
+        val polysMono = Array(nFeats) { i -> FloatArray(w) { j -> polysOrdered[i][j].toFloat() } }
+        for (k in 1 until nFeats) {
+            val prev = polysMono[k - 1]; val cur = polysMono[k]
+            for (c in 0 until w) if (cur[c] < prev[c]) cur[c] = prev[c]
+        }
+
+        val slopeTop = FloatArray(w)
+        val anchorTop = FloatArray(w)
+        val slopeBot = FloatArray(w)
+        if (nFeats >= 2) {
+            val dtop = max(targets[1] - targets[0], 1.0).toFloat()
+            val dbot = max(targets[nFeats - 1] - targets[nFeats - 2], 1.0).toFloat()
+            val t0 = targets[0].toFloat()
+            for (c in 0 until w) {
+                slopeTop[c] = (polysMono[1][c] - polysMono[0][c]) / dtop
+                anchorTop[c] = polysMono[0][c] - t0 * slopeTop[c]
+                slopeBot[c] = (polysMono[nFeats - 1][c] - polysMono[nFeats - 2][c]) / dbot
             }
-            mapY.put(0, x, mapYRow)
+        } else {
+            for (c in 0 until w) anchorTop[c] = polysMono[0][c]
+        }
+        val polyLast = polysMono[nFeats - 1]
+        val tLast = targets[nFeats - 1].toFloat()
+
+        val mapY = Mat(h, w, CvType.CV_32F)
+        val rowBuf = FloatArray(w)
+        var k = -1   // indice del segmento per la riga corrente
+        for (yy in 0 until h) {
+            val yd = yy.toFloat()
+            // avanza k finche' targets[k+1] <= yd. Sfrutta la monotonia di yy.
+            while (k + 1 < nFeats && targets[k + 1] <= yd) k++
+            if (k < 0) {
+                // sotto il primo target
+                for (c in 0 until w) rowBuf[c] = anchorTop[c] + yd * slopeTop[c]
+            } else if (k >= nFeats - 1) {
+                // sopra l'ultimo target
+                for (c in 0 until w) rowBuf[c] = polyLast[c] + (yd - tLast) * slopeBot[c]
+            } else {
+                val tk = targets[k].toFloat()
+                val denom = max(targets[k + 1] - targets[k], 1e-6).toFloat()
+                val t = (yd - tk) / denom
+                val pa = polysMono[k]; val pb = polysMono[k + 1]
+                for (c in 0 until w) rowBuf[c] = pa[c] + t * (pb[c] - pa[c])
+            }
+            mapY.put(yy, 0, rowBuf)
         }
 
         // 7. attenuazione su figure
@@ -466,9 +499,13 @@ object Engine {
         val mapYW = Mat(h, w, CvType.CV_32F)
         // mapY_w = weight * mapY + (1 - weight) * identity_y
         val identity = Mat(h, w, CvType.CV_32F)
-        for (yy in 0 until h) {
-            val row = FloatArray(w) { yy.toFloat() }
-            identity.put(yy, 0, row)
+        run {
+            val idRow = FloatArray(w)
+            for (yy in 0 until h) {
+                val v = yy.toFloat()
+                for (c in 0 until w) idRow[c] = v
+                identity.put(yy, 0, idRow)
+            }
         }
         // oneMinusW = 1 - weight (su Mat float32). OpenCV Java non offre Scalar - Mat,
         // costruiamo il complemento via (-1 * weight) + 1.
@@ -508,17 +545,5 @@ object Engine {
         return if (c == 0) Double.NaN else s / c
     }
 
-    private fun linInterp(x: Double, xp: DoubleArray, fp: DoubleArray): Double {
-        if (x <= xp[0]) return fp[0]
-        if (x >= xp.last()) return fp.last()
-        // binary search
-        var lo = 0; var hi = xp.size - 1
-        while (hi - lo > 1) {
-            val mid = (lo + hi) ushr 1
-            if (xp[mid] <= x) lo = mid else hi = mid
-        }
-        val t = (x - xp[lo]) / (xp[hi] - xp[lo])
-        return fp[lo] + t * (fp[hi] - fp[lo])
-    }
 }
 

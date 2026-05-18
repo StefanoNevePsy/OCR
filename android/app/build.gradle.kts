@@ -12,7 +12,7 @@ android {
         applicationId = "it.dewarp"
         minSdk = 26          // Android 8.0+: copre tutti i dispositivi Samsung recenti
         targetSdk = 35
-        versionCode = 1
+        versionCode = 100
         versionName = "0.1.0"
 
         ndk {
@@ -30,6 +30,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Firma il release con la keystore di debug auto-generata da AGP cosi'
+            // gli APK sono installabili senza setup extra (sideload pre-Play Store).
+            // Sostituire con una signingConfig dedicata prima della pubblicazione.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

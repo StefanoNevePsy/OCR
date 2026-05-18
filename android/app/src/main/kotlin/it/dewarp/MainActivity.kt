@@ -46,10 +46,14 @@ class MainActivity : ComponentActivity() {
 
     private fun intentPdfUri(i: Intent?): Uri? {
         if (i == null) return null
-        val data = i.data
-        if (data != null) return data
+        if (i.action == Intent.ACTION_VIEW) i.data?.let { return it }
+        // SEND / SEND_MULTIPLE: prendi la prima Uri condivisa
         @Suppress("DEPRECATION")
-        return i.getParcelableExtra(Intent.EXTRA_STREAM)
+        val single = i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+        if (single != null) return single
+        @Suppress("DEPRECATION")
+        val multiple = i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+        return multiple?.firstOrNull() ?: i.data
     }
 }
 

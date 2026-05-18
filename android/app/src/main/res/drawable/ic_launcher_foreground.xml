@@ -1,0 +1,40 @@
+<!--
+  Foreground dell'icona adaptive. Concept: tre righe sottili curve che
+  si raddrizzano (sopra storte, sotto orizzontali) dentro un cerchio.
+  Area safe Android: 72x72 entro un canvas 108x108.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Disco rosso mattone come elemento di marca -->
+    <path
+        android:fillColor="#B04632"
+        android:pathData="M 54,18 A 36,36 0 1,1 53.99,18 Z" />
+
+    <!-- Tre righe curve (storte) in alto -->
+    <path
+        android:strokeColor="#F7F4EE"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round"
+        android:pathData="M 38,42 C 46,40 62,40 70,42" />
+    <path
+        android:strokeColor="#F7F4EE"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round"
+        android:pathData="M 36,52 C 48,49 60,49 72,52" />
+
+    <!-- Tre righe perfettamente orizzontali in basso -->
+    <path
+        android:strokeColor="#F7F4EE"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round"
+        android:pathData="M 38,62 L 70,62" />
+    <path
+        android:strokeColor="#F7F4EE"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round"
+        android:pathData="M 38,71 L 70,71" />
+</vector>

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Dewarp</string>
+    <string name="share_label">Raddrizza con Dewarp</string>
     <string name="pick_pdf">Apri un PDF</string>
     <string name="pick_pdf_hint">Tocca per scegliere una scansione</string>
     <string name="processing">Elaborazione in corso</string>
