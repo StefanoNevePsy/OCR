@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dewarp</string>
+    <string name="pick_pdf">Apri un PDF</string>
+    <string name="pick_pdf_hint">Tocca per scegliere una scansione</string>
+    <string name="processing">Elaborazione in corso</string>
+    <string name="save_pdf">Salva PDF raddrizzato</string>
+    <string name="figure_attenuation">Warp sulle figure</string>
+    <string name="max_displacement">Limite spostamento</string>
+    <string name="use_gpu">Usa GPU (sperimentale)</string>
+    <string name="split_two_up">Spezza pagine doppie sul gutter</string>
+    <string name="page_of">Pagina %1$d di %2$d</string>
+</resources>

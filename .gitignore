@@ -16,3 +16,15 @@ desktop/src-tauri/gen/
 desktop/src-tauri/binaries/
 desktop/node_modules/
 desktop/dist/
+
+# Android / Gradle
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/local.properties
+android/captures/
+android/.cxx/
+*.iml
+*.hprof
+*.keystore

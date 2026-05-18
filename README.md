@@ -63,12 +63,33 @@ Architettura:
 
 Per build cross-platform: ogni piattaforma va buildata sulla rispettiva. CI matrix (GitHub Actions) raccomandata.
 
-## Uso sul Galaxy Tab S11 (Android)
+## App Android nativa (Galaxy Tab S11 e altri)
 
-App Kotlin nativa con OpenCV Android: lavorato in un branch separato (`feature/android-app`). Vedi quel branch per dettagli. Nel frattempo:
+In `android/`: app Kotlin con Jetpack Compose, OpenCV Android e PdfBox-Android. L'engine è una traduzione 1:1 della versione Python, in `it.dewarp.engine.Engine`.
 
-- **Server sul PC, browser sul tablet** (fallback rapido). Lancia `dewarp --serve --host 0.0.0.0` sul PC, apri l'IP locale dal tablet. Nessun setup sul tablet.
-- **Termux nativo**: `pkg install python tesseract poppler libjpeg-turbo` poi `pip install opencv-python-headless pymupdf img2pdf fastapi uvicorn[standard] python-multipart pytesseract`, infine clona il repo e usa il CLI o `--serve` su `localhost`. Lento ma offline.
+```bash
+cd android
+./gradlew :app:assembleRelease   # APK unsigned in app/build/outputs/apk/release/
+./gradlew :app:installDebug      # build + push su device connesso (debug)
+```
+
+Funzionalità:
+- Apri PDF via SAF (Files / Drive / Samsung Notes share-to)
+- Slider per `figureAttenuation` e `maxDisplacementFrac`
+- Toggle split 2-up
+- Salva il PDF risultante via SAF (qualunque cartella scelta)
+- Opzione GPU (sperimentale, placeholder per UMat/OpenCL futuro)
+
+Min SDK 26 (Android 8). Build su `compileSdk = 35`, AGP 8.7, Kotlin 2.0, Compose BoM 2024.12, OpenCV 4.10 da Maven Central.
+
+## CI
+
+`.github/workflows/build.yml` builda su ogni push:
+- **python-tests** (Ubuntu): pytest sull'engine Python
+- **desktop** (Linux/Mac Intel/Mac ARM/Windows): PyInstaller sidecar + Tauri bundle, artifact `.AppImage` / `.deb` / `.dmg` / `.msi`
+- **android** (Ubuntu): debug e release APK, artifact in `dewarp-android-apk`
+
+Niente upload esterni, niente cose offerte: tutto resta dentro l'organizzazione.
 
 ## Parametri principali
 
