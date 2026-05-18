@@ -1,7 +1,9 @@
 package it.dewarp.engine
 
 /**
- * Parametri del pipeline di dewarp. I default replicano `DewarpParams` Python.
+ * Parametri del pipeline di dewarp. I default replicano `DewarpParams` Python,
+ * con margini di sicurezza piu' stretti perche' il porting Java/Kotlin di OpenCV
+ * ha precisione e operazioni leggermente diverse.
  */
 data class DewarpParams(
     val targetDpi: Int = 300,
@@ -10,15 +12,20 @@ data class DewarpParams(
     val polyDegree: Int = 2,
     val minFeaturesForWarp: Int = 3,
     val minTextLinesFullConfidence: Int = 6,
-    val maxDisplacementFrac: Double = 0.04,
+    /** Tetto al displacement totale, in frazione dell'altezza pagina. */
+    val maxDisplacementFrac: Double = 0.025,
     val houghMinLenFrac: Double = 0.18,
     val houghMaxSlope: Double = 0.12,
-    val figureAttenuation: Double = 0.15,
+    /** Warp residuo applicato sulle aree figura (0 = lasciate intatte). */
+    val figureAttenuation: Double = 0.10,
     val figureMinAreaFrac: Double = 0.010,
+    /** Figure piu' grandi di questa frazione: NON usare i bordi come features.
+     *  Le figure grandi dominano il fit e producono spirali. */
+    val figureSkipEdgesAreaFrac: Double = 0.18,
     val gutterSearchFrac: Double = 0.20,
     val gutterMinContrast: Double = 12.0,
     val deskewMaxDeg: Double = 6.0,
-    val deskewStepDeg: Double = 0.4,        // step piu' largo del Python: meno tentativi su mobile
+    val deskewStepDeg: Double = 0.2,    // allineato al Python
     val padWhite: Int = 20,
     val smoothLinesSigma: Double = 1.5,
     /** Se true, usa OpenCL via T-API (UMat) dove possibile. Sperimentale su Adreno. */

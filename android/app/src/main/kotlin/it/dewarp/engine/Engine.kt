@@ -33,7 +33,10 @@ object Engine {
     private fun toGray(src: Mat): Mat {
         if (src.channels() == 1) return src.clone()
         val gray = Mat()
-        val code = if (src.channels() == 4) Imgproc.COLOR_BGRA2GRAY else Imgproc.COLOR_BGR2GRAY
+        // Bitmap ARGB_8888 -> Utils.bitmapToMat produce un Mat in ordine RGBA,
+        // quindi serve COLOR_RGBA2GRAY (non BGRA): COLOR_BGRA2GRAY scambia R<->B
+        // e ai pesi luminanza, producendo gray sbagliato sulle figure colorate.
+        val code = if (src.channels() == 4) Imgproc.COLOR_RGBA2GRAY else Imgproc.COLOR_BGR2GRAY
         Imgproc.cvtColor(src, gray, code)
         return gray
     }
@@ -292,6 +295,9 @@ object Engine {
             val ch = stats[i, Imgproc.CC_STAT_HEIGHT][0].toInt()
             val area = stats[i, Imgproc.CC_STAT_AREA][0]
             if (area < params.figureMinAreaFrac * pageArea) continue
+            // Figure troppo grandi dominano il fit e producono spirali:
+            // saltiamo i loro bordi come features (la weight mask le proteggera' comunque).
+            if (area > params.figureSkipEdgesAreaFrac * pageArea) continue
             val ratio = cw.toDouble() / max(ch, 1)
             if (ratio > 12 || cw < w * 0.10) continue
             val density = area / (cw.toDouble() * ch)
@@ -361,9 +367,17 @@ object Engine {
         val weight = Mat()
         mask.convertTo(weight, CvType.CV_32F, 1.0 / 255.0)
         mask.release()
-        // weight = 1 - mask * (1 - figureAttenuation)
-        Core.multiply(weight, Scalar(-(1.0 - params.figureAttenuation)), weight)
-        Core.add(weight, Scalar(1.0), weight)
+        // weight[c] = 1 - factor * weight[c]  (factor = 1 - figureAttenuation).
+        // Loop manuale: evita le ops Core.multiply/add con Scalar che hanno semantica
+        // ambigua tra le versioni dei binding (a volte trattano lo Scalar come vettore
+        // a 4 canali e per Mat single-channel non broadcastano come atteso).
+        val factor = (1.0 - params.figureAttenuation).toFloat()
+        val row = FloatArray(w)
+        for (y in 0 until h) {
+            weight.get(y, 0, row)
+            for (c in 0 until w) row[c] = 1f - factor * row[c]
+            weight.put(y, 0, row)
+        }
         return weight
     }
 
@@ -471,70 +485,70 @@ object Engine {
         val polyLast = polysMono[nFeats - 1]
         val tLast = targets[nFeats - 1].toFloat()
 
-        val mapY = Mat(h, w, CvType.CV_32F)
+        // 6+7+8 unificati: costruzione mapY + blend con figure weight + clamp,
+        // tutto in un singolo passaggio per riga su FloatArray.
+        //
+        // Perche' un unico loop manuale:
+        //  - le Core.* operations con Scalar (min, max, multiply, add) hanno
+        //    semantica fragile nei binding Android (trattano lo Scalar come vettore
+        //    a 4 canali e per CV_32F single-channel possono non clampare come atteso);
+        //  - clampare INLINE durante la costruzione evita di mettere mai valori
+        //    fuori range nel Mat finale, anche se il fit polinomiale o le anchor
+        //    extrapolation degenerano per pagine con figure molto grandi.
+        val maxDispF = (adaptiveMaxDispFrac * h).toFloat()
+        val weight = figureWeightMask(gray, params)
+        val weightRow = FloatArray(w)
         val rowBuf = FloatArray(w)
-        var k = -1   // indice del segmento per la riga corrente
+        val mapY = Mat(h, w, CvType.CV_32F)
+
+        var k = -1   // indice del segmento per la riga corrente (yy monotono crescente)
         for (yy in 0 until h) {
             val yd = yy.toFloat()
-            // avanza k finche' targets[k+1] <= yd. Sfrutta la monotonia di yy.
             while (k + 1 < nFeats && targets[k + 1] <= yd) k++
+
+            // Carica la riga della weight mask
+            weight.get(yy, 0, weightRow)
+
             if (k < 0) {
-                // sotto il primo target
-                for (c in 0 until w) rowBuf[c] = anchorTop[c] + yd * slopeTop[c]
+                // sotto il primo target: estrapolazione lineare con anchor_top + slope
+                for (c in 0 until w) {
+                    val src = anchorTop[c] + yd * slopeTop[c]
+                    val blended = weightRow[c] * src + (1f - weightRow[c]) * yd
+                    val d = blended - yd
+                    rowBuf[c] = yd + if (d > maxDispF) maxDispF else if (d < -maxDispF) -maxDispF else d
+                }
             } else if (k >= nFeats - 1) {
                 // sopra l'ultimo target
-                for (c in 0 until w) rowBuf[c] = polyLast[c] + (yd - tLast) * slopeBot[c]
+                for (c in 0 until w) {
+                    val src = polyLast[c] + (yd - tLast) * slopeBot[c]
+                    val blended = weightRow[c] * src + (1f - weightRow[c]) * yd
+                    val d = blended - yd
+                    rowBuf[c] = yd + if (d > maxDispF) maxDispF else if (d < -maxDispF) -maxDispF else d
+                }
             } else {
+                // interno: interpolazione lineare tra polysMono[k] e polysMono[k+1]
                 val tk = targets[k].toFloat()
                 val denom = max(targets[k + 1] - targets[k], 1e-6).toFloat()
                 val t = (yd - tk) / denom
                 val pa = polysMono[k]; val pb = polysMono[k + 1]
-                for (c in 0 until w) rowBuf[c] = pa[c] + t * (pb[c] - pa[c])
+                for (c in 0 until w) {
+                    val src = pa[c] + t * (pb[c] - pa[c])
+                    val blended = weightRow[c] * src + (1f - weightRow[c]) * yd
+                    val d = blended - yd
+                    rowBuf[c] = yd + if (d > maxDispF) maxDispF else if (d < -maxDispF) -maxDispF else d
+                }
             }
             mapY.put(yy, 0, rowBuf)
         }
 
-        // 7. attenuazione su figure
-        val weight = figureWeightMask(gray, params)
-        val mapYW = Mat(h, w, CvType.CV_32F)
-        // mapY_w = weight * mapY + (1 - weight) * identity_y
-        val identity = Mat(h, w, CvType.CV_32F)
-        run {
-            val idRow = FloatArray(w)
-            for (yy in 0 until h) {
-                val v = yy.toFloat()
-                for (c in 0 until w) idRow[c] = v
-                identity.put(yy, 0, idRow)
-            }
-        }
-        // oneMinusW = 1 - weight (su Mat float32). OpenCV Java non offre Scalar - Mat,
-        // costruiamo il complemento via (-1 * weight) + 1.
-        val oneMinusW = Mat()
-        Core.multiply(weight, Scalar(-1.0), oneMinusW)
-        Core.add(oneMinusW, Scalar(1.0), oneMinusW)
-        val a = Mat(); Core.multiply(mapY, weight, a)
-        val b = Mat(); Core.multiply(identity, oneMinusW, b)
-        Core.add(a, b, mapYW)
-        a.release(); b.release(); oneMinusW.release()
-
-        // 8. clamp displacement
-        val maxDisp = adaptiveMaxDispFrac * h
-        val delta = Mat()
-        Core.subtract(mapYW, identity, delta)
-        val deltaMin = Mat(); val deltaMax = Mat()
-        Core.min(delta, Scalar(maxDisp), deltaMax)
-        Core.max(deltaMax, Scalar(-maxDisp), deltaMin)
-        Core.add(identity, deltaMin, mapYW)
-        delta.release(); deltaMin.release(); deltaMax.release(); identity.release()
-
         // 9. remap
         val out = Mat()
         Imgproc.remap(
-            deskewed, out, mapX, mapYW,
+            deskewed, out, mapX, mapY,
             Imgproc.INTER_CUBIC, Core.BORDER_CONSTANT, whiteScalar(deskewed),
         )
         gray.release()
-        mapX.release(); mapY.release(); mapYW.release(); weight.release()
+        mapX.release(); mapY.release(); weight.release()
         deskewed.release()
         return out
     }

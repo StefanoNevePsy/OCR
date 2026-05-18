@@ -19,6 +19,7 @@ desktop/dist/
 
 # Android / Gradle
 android/.gradle/
+android/.kotlin/
 android/.idea/
 android/build/
 android/app/build/
