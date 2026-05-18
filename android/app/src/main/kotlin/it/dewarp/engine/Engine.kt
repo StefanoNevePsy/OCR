@@ -381,9 +381,217 @@ object Engine {
         return weight
     }
 
+    // --------------------------- motore polyline --------------------------- //
+
+    private fun extractBaselines(textMask: Mat, binary: Mat, params: DewarpParams): List<DoubleArray> {
+        val h = textMask.rows(); val w = textMask.cols()
+        val labels = Mat(); val stats = Mat(); val centroids = Mat()
+        val num = Imgproc.connectedComponentsWithStats(textMask, labels, stats, centroids, 8)
+
+        val collected = ArrayList<Pair<Double, DoubleArray>>()
+        for (i in 1 until num) {
+            val x = stats[i, Imgproc.CC_STAT_LEFT][0].toInt()
+            val y = stats[i, Imgproc.CC_STAT_TOP][0].toInt()
+            val cw = stats[i, Imgproc.CC_STAT_WIDTH][0].toInt()
+            val ch = stats[i, Imgproc.CC_STAT_HEIGHT][0].toInt()
+            if (ch < params.minLineHeightPx || ch > h * 0.25) continue
+            if (cw < w * params.lineMinWidthFrac) continue
+
+            val labelROI = Mat(labels, Rect(x, y, cw, ch))
+            val binROI = Mat(binary, Rect(x, y, cw, ch))
+            val labelFlat = IntArray(cw * ch); labelROI.get(0, 0, labelFlat); labelROI.release()
+            val binFlat = ByteArray(cw * ch); binROI.get(0, 0, binFlat); binROI.release()
+
+            // Per ogni colonna: ultima riga con inchiostro (label==i AND bin!=0)
+            val lastRow = IntArray(cw) { -1 }
+            for (row in 0 until ch) {
+                val base = row * cw
+                for (col in 0 until cw) {
+                    if (labelFlat[base + col] == i && binFlat[base + col].toInt() != 0) {
+                        lastRow[col] = row
+                    }
+                }
+            }
+            // Filtro is-text-line: contare le transizioni 0<->ink lungo x
+            var transitions = 0; var prev = false
+            for (col in 0 until cw) {
+                val cur = lastRow[col] >= 0
+                if (col > 0 && cur != prev) transitions++
+                prev = cur
+            }
+            if (transitions < params.lineMinTransitions) continue
+
+            val ysCol = DoubleArray(cw) { Double.NaN }
+            for (col in 0 until cw) {
+                if (lastRow[col] >= 0) ysCol[col] = (y + lastRow[col]).toDouble()
+            }
+
+            // Filtra descender: scarta colonne dove baseline > median + thresh*ch
+            val valid = ysCol.filter { !it.isNaN() }
+            if (valid.size < cw * 0.5) continue
+            val sorted = valid.sorted()
+            val median = sorted[sorted.size / 2]
+            val limit = median + params.polylineDescenderThresh * ch
+            for (col in 0 until cw) {
+                if (!ysCol[col].isNaN() && ysCol[col] > limit) ysCol[col] = Double.NaN
+            }
+
+            // Forward/backward fill dei NaN
+            var last = Double.NaN
+            for (col in 0 until cw) {
+                if (ysCol[col].isNaN()) { if (!last.isNaN()) ysCol[col] = last }
+                else last = ysCol[col]
+            }
+            last = Double.NaN
+            for (col in cw - 1 downTo 0) {
+                if (ysCol[col].isNaN()) { if (!last.isNaN()) ysCol[col] = last }
+                else last = ysCol[col]
+            }
+            if (ysCol.all { it.isNaN() }) continue
+
+            // Smoothing: media mobile centrata
+            val smW = maxOf(3, params.polylineSmoothPx or 1)
+            val half = smW / 2
+            val smoothed = DoubleArray(cw)
+            for (col in 0 until cw) {
+                var sum = 0.0; var cnt = 0
+                val lo = maxOf(0, col - half); val hi = minOf(cw - 1, col + half)
+                for (s in lo..hi) {
+                    if (!ysCol[s].isNaN()) { sum += ysCol[s]; cnt++ }
+                }
+                smoothed[col] = if (cnt > 0) sum / cnt else Double.NaN
+            }
+
+            val ysFull = DoubleArray(w) { Double.NaN }
+            for (col in 0 until cw) ysFull[x + col] = smoothed[col]
+            val meanY = smoothed.filter { !it.isNaN() }.average()
+            collected.add(meanY to ysFull)
+        }
+        labels.release(); stats.release(); centroids.release()
+        return collected.sortedBy { it.first }.map { it.second }
+    }
+
+    private fun dewarpWithPolylines(img: Mat, baselines: List<DoubleArray>, h: Int, w: Int, params: DewarpParams): Mat {
+        // Estende ai margini con valore al bordo (no slope-based extrapolation)
+        val polys = ArrayList<DoubleArray>()
+        val targetsList = ArrayList<Double>()
+        for (bl in baselines) {
+            var firstIdx = -1; var lastIdx = -1
+            for (j in 0 until w) {
+                if (!bl[j].isNaN()) {
+                    if (firstIdx < 0) firstIdx = j
+                    lastIdx = j
+                }
+            }
+            if (firstIdx < 0 || lastIdx == firstIdx) continue
+            val ext = bl.copyOf()
+            val firstV = ext[firstIdx]; val lastV = ext[lastIdx]
+            for (j in 0 until firstIdx) ext[j] = firstV
+            for (j in lastIdx + 1 until w) ext[j] = lastV
+            // Interp lineare per eventuali NaN interni
+            for (j in firstIdx..lastIdx) {
+                if (ext[j].isNaN()) {
+                    var prev = j - 1; while (prev >= 0 && ext[prev].isNaN()) prev--
+                    var next = j + 1; while (next < w && ext[next].isNaN()) next++
+                    ext[j] = when {
+                        prev >= 0 && next < w -> {
+                            val t = (j - prev).toDouble() / (next - prev)
+                            ext[prev] + t * (ext[next] - ext[prev])
+                        }
+                        prev >= 0 -> ext[prev]
+                        next < w -> ext[next]
+                        else -> 0.0
+                    }
+                }
+            }
+            polys.add(ext)
+            targetsList.add(ext.average())
+        }
+
+        if (polys.size < params.minFeaturesForWarp) return img.clone()
+        // Ordina per y media
+        val pairs = polys.zip(targetsList).sortedBy { it.second }
+        val n = pairs.size
+        val polysArr = Array(n) { pairs[it].first }
+        val targets = DoubleArray(n) { pairs[it].second }
+        // Monotonia colonna per colonna
+        for (k in 1 until n) {
+            val prev = polysArr[k - 1]; val cur = polysArr[k]
+            for (c in 0 until w) if (cur[c] < prev[c]) cur[c] = prev[c]
+        }
+
+        val maxDispF = (params.maxDisplacementFrac * h).toFloat()
+        val mapX = Mat(h, w, CvType.CV_32F)
+        run {
+            val rowBuf = FloatArray(w) { it.toFloat() }
+            for (yy in 0 until h) mapX.put(yy, 0, rowBuf)
+        }
+
+        val mapY = Mat(h, w, CvType.CV_32F)
+        val rowBuf = FloatArray(w)
+        var k = -1
+        for (yy in 0 until h) {
+            val yd = yy.toDouble()
+            while (k + 1 < n && targets[k + 1] <= yd) k++
+            if (k < 0) {
+                val p0 = polysArr[0]; val t0 = targets[0]
+                for (c in 0 until w) {
+                    val src = p0[c] + (yd - t0)
+                    val d = (src - yd).toFloat()
+                    rowBuf[c] = (yd + d.coerceIn(-maxDispF, maxDispF).toDouble()).toFloat()
+                }
+            } else if (k >= n - 1) {
+                val pl = polysArr[n - 1]; val tl = targets[n - 1]
+                for (c in 0 until w) {
+                    val src = pl[c] + (yd - tl)
+                    val d = (src - yd).toFloat()
+                    rowBuf[c] = (yd + d.coerceIn(-maxDispF, maxDispF).toDouble()).toFloat()
+                }
+            } else {
+                val tk = targets[k]
+                val denom = maxOf(targets[k + 1] - targets[k], 1e-6)
+                val t = (yd - tk) / denom
+                val pa = polysArr[k]; val pb = polysArr[k + 1]
+                for (c in 0 until w) {
+                    val src = pa[c] + t * (pb[c] - pa[c])
+                    val d = (src - yd).toFloat()
+                    rowBuf[c] = (yd + d.coerceIn(-maxDispF, maxDispF).toDouble()).toFloat()
+                }
+            }
+            mapY.put(yy, 0, rowBuf)
+        }
+
+        val out = Mat()
+        Imgproc.remap(img, out, mapX, mapY, Imgproc.INTER_CUBIC, Core.BORDER_CONSTANT, whiteScalar(img))
+        mapX.release(); mapY.release()
+        return out
+    }
+
+    private fun dewarpPagePolyline(img: Mat, params: DewarpParams): Mat {
+        val pad = params.padWhite
+        val padded = if (pad > 0) {
+            val o = Mat()
+            Core.copyMakeBorder(img, o, pad, pad, pad, pad, Core.BORDER_CONSTANT, whiteScalar(img))
+            o
+        } else img.clone()
+        val (deskewed, _) = deskew(padded, params)
+        padded.release()
+        val gray = toGray(deskewed)
+        val h = gray.rows(); val w = gray.cols()
+        val binary = binarize(gray)
+        val textMask = detectTextMask(gray, params)
+        val baselines = extractBaselines(textMask, binary, params)
+        binary.release(); textMask.release(); gray.release()
+        if (baselines.size < params.minFeaturesForWarp) return deskewed
+        val out = dewarpWithPolylines(deskewed, baselines, h, w, params)
+        deskewed.release()
+        return out
+    }
+
     // --------------------------- dewarp principale ------------------------- //
 
     fun dewarpPage(img: Mat, params: DewarpParams = DewarpParams()): Mat {
+        if (params.engine == "polyline") return dewarpPagePolyline(img, params)
         // 0. pad bianco
         val pad = params.padWhite
         val padded = if (pad > 0) {

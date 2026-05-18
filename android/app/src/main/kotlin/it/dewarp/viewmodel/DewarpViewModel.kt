@@ -49,6 +49,11 @@ class DewarpViewModel(app: Application) : AndroidViewModel(app) {
         _params.value = _params.value.copy(maxDisplacementFrac = v.toDouble())
     }
     fun setSplitTwoUp(v: Boolean) { _splitTwoUp.value = v }
+    fun setEngine(name: String) {
+        if (name == "polyline" || name == "polynomial") {
+            _params.value = _params.value.copy(engine = name)
+        }
+    }
     fun setUseGpu(v: Boolean) {
         _params.value = _params.value.copy(useGpu = v)
         // OpenCV Android non espone Core.setUseOpenCL in 4.10. Lasciamo il flag nei

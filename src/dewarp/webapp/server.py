@@ -69,7 +69,11 @@ def _run_job(job: Job):
             job.state = "running"
             job.message = "rendering PDF"
 
+        engine_choice = str(job.options.get("engine", "polynomial"))
+        if engine_choice not in ("polynomial", "polyline"):
+            engine_choice = "polynomial"
         params = DewarpParams(
+            engine=engine_choice,
             figure_attenuation=float(job.options.get("figure_attenuation", 0.15)),
             max_displacement_frac=float(job.options.get("max_displacement_frac", 0.04)),
             poly_degree=int(job.options.get("poly_degree", 2)),
@@ -132,6 +136,7 @@ def create_app() -> FastAPI:
     @app.post("/api/jobs")
     async def create_job(
         file: UploadFile = File(...),
+        engine: str = Form("polynomial"),
         figure_attenuation: float = Form(0.15),
         max_displacement_frac: float = Form(0.04),
         poly_degree: int = Form(2),
@@ -155,6 +160,7 @@ def create_app() -> FastAPI:
             input_path=input_path,
             output_path=output_path,
             options={
+                "engine": engine,
                 "figure_attenuation": figure_attenuation,
                 "max_displacement_frac": max_displacement_frac,
                 "poly_degree": poly_degree,

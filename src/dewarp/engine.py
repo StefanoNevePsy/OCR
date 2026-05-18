@@ -24,6 +24,13 @@ import numpy as np
 class DewarpParams:
     """Parametri esposti all'utente. I default funzionano sulla maggior parte dei libri."""
     target_dpi: int = 300                # DPI di lavoro
+    # "polynomial": fit polinomiale di grado 2 sulla midline di ogni riga, robust
+    #   per pagine con tante righe regolari ma puo' oscillare se le features sono
+    #   poche o rumorose (cap maxDisplacementFrac protegge dai casi peggiori).
+    # "polyline": polyline (campioni della baseline smussati) per ogni riga;
+    #   non estrapola, non oscilla, segue letteralmente il dato. Migliore per
+    #   pagine con poche righe, figure grandi, o curvature non-polinomiali.
+    engine: str = "polynomial"
     min_line_height_px: int = 8          # altezza minima di una riga di testo
     morph_kernel_w: int = 41             # larghezza kernel orizzontale per legare le parole
     poly_degree: int = 2                 # grado massimo del polinomio (puo' essere ridotto adattivamente)
@@ -33,6 +40,13 @@ class DewarpParams:
     support_feature_weight: float = 0.5  # peso simbolico (non usato come weighted fit)
     hough_min_len_frac: float = 0.18     # lunghezza minima linea Hough come frazione di w
     hough_max_slope: float = 0.12        # tan(angolo) massimo per considerarla orizzontale
+    # Filtri "is text line" usati dal motore polyline:
+    line_min_width_frac: float = 0.18    # lunghezza minima riga (frazione di w)
+    line_min_transitions: int = 8        # transizioni 0<->255 nel profilo verticale
+                                         # del bounding box (specks/graffi ne hanno poche)
+    polyline_smooth_px: int = 25         # finestra di smoothing orizzontale per la baseline
+    polyline_descender_thresh: float = 0.35  # tolleranza per scartare descender (g, p, q)
+                                             # come frazione dell'altezza riga
     figure_attenuation: float = 0.15     # 0 = niente warp sulle figure, 1 = warp pieno
     figure_min_area_frac: float = 0.010  # area minima (frazione pagina) per essere figura
     figure_skip_edges_area_frac: float = 0.18  # figure piu' grandi: bordi NON usati come features
@@ -364,11 +378,238 @@ def _fit_polynomial(ys: np.ndarray, degree: int, width: int) -> np.ndarray:
     return out
 
 
+# ----------------------------- motore polyline ----------------------------- #
+
+def _is_text_line_component(roi_bin: np.ndarray, cw: int, params: DewarpParams) -> bool:
+    """Filtra "specks and scratches": una vera riga di testo ha tante transizioni
+    inchiostro/sfondo lungo l'asse x. Un graffio o un piccolo blob no.
+
+    `roi_bin` e' la ROI binarizzata della componente (255 = inchiostro).
+    """
+    if cw < 4:
+        return False
+    # Profilo orizzontale: per ogni colonna, c'e' inchiostro? (1 o 0)
+    col_has_ink = (roi_bin.max(axis=0) > 0).astype(np.int8)
+    transitions = int(np.abs(np.diff(col_has_ink)).sum())
+    return transitions >= params.line_min_transitions
+
+
+def _extract_baselines(
+    text_mask: np.ndarray,
+    binary: np.ndarray,
+    params: DewarpParams,
+) -> list[np.ndarray]:
+    """Per ogni riga di testo, costruisce la baseline (y inferiore) come polyline.
+
+    Ritorna una lista di array (W,) con y baseline per colonna, NaN dove la riga
+    non e' presente. La baseline e' robusta ai descender (g, p, q, y): per
+    colonne dove il pixel piu' basso scende sotto la mediana della riga di una
+    quantita' significativa, si interpola dai vicini.
+    """
+    h, w = text_mask.shape
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(text_mask, connectivity=8)
+
+    baselines: list[tuple[float, np.ndarray]] = []
+    for i in range(1, num):
+        x, y, cw, ch, _area = stats[i]
+        if ch < params.min_line_height_px or ch > h * 0.25:
+            continue
+        if cw < w * params.line_min_width_frac:
+            continue
+
+        # ROI binarizzata: pixel di inchiostro dentro il bounding box di questa riga.
+        # Usiamo `binary` (no morfologia di linking) per avere lettere distinte.
+        roi_label = (labels[y:y + ch, x:x + cw] == i)
+        roi_bin = binary[y:y + ch, x:x + cw] * roi_label.astype(np.uint8)
+
+        if not _is_text_line_component(roi_bin, cw, params):
+            continue
+
+        # baseline[col] = riga piu' bassa che ha inchiostro
+        ys_per_col = np.full(cw, np.nan, dtype=np.float64)
+        has_ink = roi_bin > 0
+        col_any = has_ink.any(axis=0)
+        # indice riga piu' basso per ogni colonna con inchiostro
+        # (argmax dal basso su flip)
+        flipped = has_ink[::-1, :]
+        rev_first = flipped.argmax(axis=0)
+        last_row = (ch - 1) - rev_first  # in coordinate locali della ROI
+        ys_per_col[col_any] = y + last_row[col_any].astype(np.float64)
+
+        # Filtra descender: scarta colonne dove la baseline locale scende sotto
+        # la mediana di una quantita' significativa.
+        valid = ~np.isnan(ys_per_col)
+        if valid.sum() < cw * 0.5:
+            continue
+        median_y = float(np.median(ys_per_col[valid]))
+        descender_limit = median_y + params.polyline_descender_thresh * ch
+        outliers = valid & (ys_per_col > descender_limit)
+        ys_per_col[outliers] = np.nan
+
+        # Smussa orizzontalmente con uniform_filter (ignorando NaN tramite forward fill).
+        # Forward/backward fill dei NaN per evitare di propagarli, poi smooth.
+        valid_after = ~np.isnan(ys_per_col)
+        if valid_after.sum() < cw * 0.5:
+            continue
+        filled = ys_per_col.copy()
+        # forward fill
+        last = np.nan
+        for j in range(cw):
+            if np.isnan(filled[j]):
+                if not np.isnan(last):
+                    filled[j] = last
+            else:
+                last = filled[j]
+        # backward fill (per la coda iniziale)
+        last = np.nan
+        for j in range(cw - 1, -1, -1):
+            if np.isnan(filled[j]):
+                if not np.isnan(last):
+                    filled[j] = last
+            else:
+                last = filled[j]
+        # Smoothing: media mobile lungo x
+        sm_w = max(3, params.polyline_smooth_px | 1)  # dispari
+        kernel = np.ones(sm_w, dtype=np.float64) / sm_w
+        smoothed = np.convolve(filled, kernel, mode="same")
+
+        # Promuovi alla larghezza piena della pagina, NaN al di fuori
+        ys_full = np.full(w, np.nan, dtype=np.float64)
+        ys_full[x:x + cw] = smoothed
+        baselines.append((float(np.mean(smoothed)), ys_full))
+
+    baselines.sort(key=lambda p: p[0])
+    return [b for _, b in baselines]
+
+
+def _dewarp_with_polylines(
+    img: np.ndarray,
+    baselines: list[np.ndarray],
+    h: int,
+    w: int,
+    params: DewarpParams,
+) -> np.ndarray:
+    """Costruisce mapY interpolando verticalmente tra polyline adiacenti, con
+    estensione costante (non lineare) ai margini orizzontali e clamp finale.
+    """
+    n = len(baselines)
+    # Per ogni baseline, riempie NaN ai margini orizzontali con valore al bordo
+    # (estensione costante: non estrapola lo slope, evita lo "spirale" effect).
+    extended = []
+    targets = []
+    for bl in baselines:
+        valid = ~np.isnan(bl)
+        if valid.sum() < 2:
+            continue
+        idx = np.where(valid)[0]
+        first_v = bl[idx[0]]
+        last_v = bl[idx[-1]]
+        ext = bl.copy()
+        ext[:idx[0]] = first_v
+        ext[idx[-1] + 1:] = last_v
+        # Eventuali NaN interni (improbabili dopo fill): interp lineare
+        if np.isnan(ext).any():
+            xs = np.arange(w)
+            valid_ext = ~np.isnan(ext)
+            ext = np.interp(xs, xs[valid_ext], ext[valid_ext])
+        extended.append(ext)
+        targets.append(float(np.mean(ext)))
+
+    if len(extended) < params.min_features_for_warp:
+        return img.copy()
+
+    polys = np.stack(extended, axis=0)               # (N, W) float64
+    targets_arr = np.array(targets, dtype=np.float64)
+    # Ordina per y media (di solito gia' ordinato)
+    order = np.argsort(targets_arr)
+    polys = polys[order]
+    targets_arr = targets_arr[order]
+    n = polys.shape[0]
+
+    # Forza monotonia colonna per colonna
+    polys = np.maximum.accumulate(polys, axis=0)
+
+    y_dst = np.arange(h, dtype=np.float64)
+    map_x = np.tile(np.arange(w, dtype=np.float32), (h, 1))
+
+    # Per ogni y_dst: trova k tale che targets[k] <= y_dst < targets[k+1]
+    idx = np.searchsorted(targets_arr, y_dst, side="right")
+    k = np.clip(idx - 1, 0, n - 2)
+    src_top = polys[k]
+    src_bot = polys[k + 1]
+    t_top = targets_arr[k]
+    t_bot = targets_arr[k + 1]
+    denom = np.maximum(t_bot - t_top, 1e-6)
+    t = ((y_dst - t_top) / denom)[:, None]
+    inside = src_top + t * (src_bot - src_top)
+
+    # Sopra il primo target / sotto l'ultimo: estensione COSTANTE, non slope.
+    # Cosi' anche se le baseline iniziali/finali non coprono tutta la pagina,
+    # i margini non esplodono.
+    below_mask = (idx == 0)[:, None]
+    above_mask = (idx == n)[:, None]
+    # Per "below" usiamo polys[0] + (y - targets[0]) cosi' il warp sopra la prima
+    # riga e' "trasportato rigidamente": pattern del primo target traslato.
+    y_below = polys[0][None, :] + (y_dst[:, None] - targets_arr[0])
+    y_above = polys[-1][None, :] + (y_dst[:, None] - targets_arr[-1])
+
+    map_y = np.where(below_mask, y_below, np.where(above_mask, y_above, inside))
+
+    # Clamp displacement (rete di sicurezza)
+    identity = np.tile(np.arange(h, dtype=np.float64).reshape(-1, 1), (1, w))
+    max_disp = params.max_displacement_frac * h
+    delta = np.clip(map_y - identity, -max_disp, max_disp)
+    map_y = (identity + delta).astype(np.float32)
+    map_x = map_x.astype(np.float32)
+
+    bv = (255,) * (1 if img.ndim == 2 else img.shape[2])
+    out = cv2.remap(
+        img, map_x, map_y,
+        interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT, borderValue=bv,
+    )
+    return out
+
+
+def dewarp_page_polyline(img: np.ndarray, params: Optional[DewarpParams] = None) -> np.ndarray:
+    """Variante con polyline (baseline samplate + smoothing) invece di polynomial fit."""
+    p = params or DewarpParams()
+
+    # Pad bianco
+    pad = p.pad_white
+    if pad > 0:
+        bv = (255,) * (1 if img.ndim == 2 else img.shape[2])
+        img_p = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=bv)
+    else:
+        img_p = img
+
+    # Deskew
+    img_d, _ = deskew(img_p, p)
+    gray_d = _to_gray(img_d)
+    h, w = gray_d.shape
+
+    binary = _binarize(gray_d)
+    text_mask = _detect_text_mask(gray_d, p)
+    baselines = _extract_baselines(text_mask, binary, p)
+
+    if len(baselines) < p.min_features_for_warp:
+        return img_d
+
+    return _dewarp_with_polylines(img_d, baselines, h, w, p)
+
+
 # ----------------------------- dewarp principale ----------------------------- #
 
 def dewarp_page(img: np.ndarray, params: Optional[DewarpParams] = None) -> np.ndarray:
-    """Raddrizza una pagina singola. Input/output in BGR o gray uint8."""
+    """Raddrizza una pagina singola. Input/output in BGR o gray uint8.
+
+    Dispatch sul motore selezionato da `params.engine`:
+      - "polyline": baseline samplate + smoothing, no estrapolazione polinomiale
+      - "polynomial" (default): fit polinomiale di grado 2 sulla midline
+    """
     p = params or DewarpParams()
+    if p.engine == "polyline":
+        return dewarp_page_polyline(img, p)
     gray = _to_gray(img)
 
     # Pad bianco per evitare bordi neri dopo remap

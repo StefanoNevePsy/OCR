@@ -7,9 +7,19 @@ package it.dewarp.engine
  */
 data class DewarpParams(
     val targetDpi: Int = 300,
+    /** "polynomial" (default) o "polyline". Vedi engine.py per i tradeoff. */
+    val engine: String = "polynomial",
     val minLineHeightPx: Int = 8,
     val morphKernelW: Int = 41,
     val polyDegree: Int = 2,
+    /** Larghezza minima di una riga di testo (frazione di w), motore polyline. */
+    val lineMinWidthFrac: Double = 0.18,
+    /** Transizioni 0<->255 minime per accettare una riga come testo (motore polyline). */
+    val lineMinTransitions: Int = 8,
+    /** Finestra di smoothing orizzontale sulla baseline (px, motore polyline). */
+    val polylineSmoothPx: Int = 25,
+    /** Tolleranza descender come frazione dell'altezza riga (motore polyline). */
+    val polylineDescenderThresh: Double = 0.35,
     val minFeaturesForWarp: Int = 3,
     val minTextLinesFullConfidence: Int = 6,
     /** Tetto al displacement totale, in frazione dell'altezza pagina. */

@@ -22,6 +22,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ocr", action="store_true", help="Aggiunge layer di testo OCR (Tesseract)")
     p.add_argument("--lang", default="ita", help="Lingua OCR (default ita)")
     p.add_argument("--jpeg-quality", type=int, default=88, help="Qualita' JPEG nelle pagine di output (1-100)")
+    p.add_argument("--engine", choices=["polynomial", "polyline"], default="polynomial",
+                   help="Motore di dewarp. polynomial=fit di grado 2 sulla midline (default); "
+                        "polyline=baseline samplate + smoothing, robusto su pagine difficili")
     p.add_argument("--poly-degree", type=int, default=3, help="Grado del polinomio per le righe")
     p.add_argument("--figure-attenuation", type=float, default=0.15,
                    help="Quanto warp applicare sulle figure (0=niente, 1=pieno)")
@@ -45,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
 
     params = DewarpParams(
         target_dpi=args.dpi,
+        engine=args.engine,
         poly_degree=args.poly_degree,
         figure_attenuation=args.figure_attenuation,
     )

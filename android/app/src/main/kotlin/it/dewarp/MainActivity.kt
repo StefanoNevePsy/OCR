@@ -95,6 +95,7 @@ fun DewarpApp(initialUri: Uri?, vm: DewarpViewModel = viewModel()) {
                 onMaxDisp = { vm.setMaxDisplacement(it) },
                 onSplitToggle = { vm.setSplitTwoUp(it) },
                 onGpuToggle = { vm.setUseGpu(it) },
+                onEngineChange = { vm.setEngine(it) },
                 onStart = {
                     val name = "dewarped.pdf"
                     createPdf.launch(name)
@@ -136,6 +137,7 @@ private fun IdleStage(
     onMaxDisp: (Float) -> Unit,
     onSplitToggle: (Boolean) -> Unit,
     onGpuToggle: (Boolean) -> Unit,
+    onEngineChange: (String) -> Unit,
     onStart: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -151,6 +153,7 @@ private fun IdleStage(
             onMaxDisp = onMaxDisp,
             onSplitToggle = onSplitToggle,
             onGpuToggle = onGpuToggle,
+            onEngineChange = onEngineChange,
         )
 
         Button(
@@ -207,6 +210,7 @@ private fun OptionsCard(
     onMaxDisp: (Float) -> Unit,
     onSplitToggle: (Boolean) -> Unit,
     onGpuToggle: (Boolean) -> Unit,
+    onEngineChange: (String) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -216,6 +220,8 @@ private fun OptionsCard(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("Opzioni", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+        EngineSelector(current = params.engine, onChange = onEngineChange)
 
         SliderRow(
             label = "Warp sulle figure",
@@ -252,6 +258,36 @@ private fun SliderRow(label: String, value: Float, valueRange: ClosedFloatingPoi
             Text(valueLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Slider(value = value, onValueChange = onChange, valueRange = valueRange)
+    }
+}
+
+@Composable
+private fun EngineSelector(current: String, onChange: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "Motore di dewarp",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = current == "polynomial",
+                onClick = { onChange("polynomial") },
+                label = { Text("Polinomiale") },
+            )
+            FilterChip(
+                selected = current == "polyline",
+                onClick = { onChange("polyline") },
+                label = { Text("Polyline") },
+            )
+        }
+        Text(
+            text = if (current == "polynomial")
+                "Fit di grado 2 sulla midline. Ottimo su pagine con tante righe regolari."
+            else
+                "Polyline samplate sulla baseline. Robusto su pagine con figure grandi o poche righe.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
