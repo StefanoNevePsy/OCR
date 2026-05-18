@@ -93,6 +93,7 @@ fun DewarpApp(initialUri: Uri?, vm: DewarpViewModel = viewModel()) {
                 onPick = { openPdf.launch(arrayOf("application/pdf")) },
                 onFigureAtt = { vm.setFigureAttenuation(it) },
                 onMaxDisp = { vm.setMaxDisplacement(it) },
+                onSmoothPx = { vm.setPolylineSmoothPx(it) },
                 onSplitToggle = { vm.setSplitTwoUp(it) },
                 onGpuToggle = { vm.setUseGpu(it) },
                 onEngineChange = { vm.setEngine(it) },
@@ -135,6 +136,7 @@ private fun IdleStage(
     onPick: () -> Unit,
     onFigureAtt: (Float) -> Unit,
     onMaxDisp: (Float) -> Unit,
+    onSmoothPx: (Float) -> Unit,
     onSplitToggle: (Boolean) -> Unit,
     onGpuToggle: (Boolean) -> Unit,
     onEngineChange: (String) -> Unit,
@@ -151,6 +153,7 @@ private fun IdleStage(
             splitTwoUp = splitTwoUp,
             onFigureAtt = onFigureAtt,
             onMaxDisp = onMaxDisp,
+            onSmoothPx = onSmoothPx,
             onSplitToggle = onSplitToggle,
             onGpuToggle = onGpuToggle,
             onEngineChange = onEngineChange,
@@ -208,6 +211,7 @@ private fun OptionsCard(
     splitTwoUp: Boolean,
     onFigureAtt: (Float) -> Unit,
     onMaxDisp: (Float) -> Unit,
+    onSmoothPx: (Float) -> Unit,
     onSplitToggle: (Boolean) -> Unit,
     onGpuToggle: (Boolean) -> Unit,
     onEngineChange: (String) -> Unit,
@@ -237,6 +241,15 @@ private fun OptionsCard(
             valueLabel = "${(params.maxDisplacementFrac * 100).toInt()}%",
             onChange = onMaxDisp,
         )
+        if (params.engine == "polyline") {
+            SliderRow(
+                label = "Smoothing baseline",
+                value = params.polylineSmoothPx.toFloat(),
+                valueRange = 11f..251f,
+                valueLabel = "${params.polylineSmoothPx} px",
+                onChange = onSmoothPx,
+            )
+        }
         SwitchRow(
             label = "Spezza pagine doppie sul gutter",
             checked = splitTwoUp,

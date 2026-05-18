@@ -44,7 +44,13 @@ class DewarpParams:
     line_min_width_frac: float = 0.18    # lunghezza minima riga (frazione di w)
     line_min_transitions: int = 8        # transizioni 0<->255 nel profilo verticale
                                          # del bounding box (specks/graffi ne hanno poche)
-    polyline_smooth_px: int = 25         # finestra di smoothing orizzontale per la baseline
+    polyline_smooth_px: int = 81         # finestra media mobile orizzontale sulla baseline
+                                         # (era 25; troppo localizzata, lasciava ondulazione
+                                         #  lettera-per-lettera. ~80 px a 300 dpi smussa via
+                                         #  le micro-variazioni preservando la curvatura macro)
+    polyline_median_px: int = 7          # pre-filter mediano prima della media mobile,
+                                         # robusto contro outlier puntuali (es. punteggiatura
+                                         #  che il filtro descender non ha pescato)
     polyline_descender_thresh: float = 0.35  # tolleranza per scartare descender (g, p, q)
                                              # come frazione dell'altezza riga
     figure_attenuation: float = 0.15     # 0 = niente warp sulle figure, 1 = warp pieno
@@ -468,7 +474,16 @@ def _extract_baselines(
                     filled[j] = last
             else:
                 last = filled[j]
-        # Smoothing: media mobile lungo x
+        # Pre-filter mediano: rimuove outlier puntuali (punteggiatura, micro-rumore)
+        # mantenendo i bordi della curva macro.
+        med_w = max(3, params.polyline_median_px | 1)  # dispari
+        if med_w >= 3 and filled.size >= med_w:
+            half = med_w // 2
+            padded = np.pad(filled, half, mode="edge")
+            windows = np.lib.stride_tricks.sliding_window_view(padded, med_w)
+            filled = np.median(windows, axis=1)
+        # Smoothing: media mobile lungo x (kernel ampio per filtrare il jitter
+        # lettera-per-lettera e tenere solo la curvatura macroscopica)
         sm_w = max(3, params.polyline_smooth_px | 1)  # dispari
         kernel = np.ones(sm_w, dtype=np.float64) / sm_w
         smoothed = np.convolve(filled, kernel, mode="same")
@@ -528,6 +543,11 @@ def _dewarp_with_polylines(
 
     # Forza monotonia colonna per colonna
     polys = np.maximum.accumulate(polys, axis=0)
+
+    # NB: niente smoothing verticale tra baseline (lo applichiamo solo nel
+    # motore polynomial). Le baseline qui sono gia' smussate orizzontalmente,
+    # e mediare tra righe vicine produce "echi" duplicati delle righe
+    # ravvicinate (es. titolo + sottotitolo).
 
     y_dst = np.arange(h, dtype=np.float64)
     map_x = np.tile(np.arange(w, dtype=np.float32), (h, 1))

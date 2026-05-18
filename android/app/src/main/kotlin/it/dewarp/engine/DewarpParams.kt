@@ -16,8 +16,10 @@ data class DewarpParams(
     val lineMinWidthFrac: Double = 0.18,
     /** Transizioni 0<->255 minime per accettare una riga come testo (motore polyline). */
     val lineMinTransitions: Int = 8,
-    /** Finestra di smoothing orizzontale sulla baseline (px, motore polyline). */
-    val polylineSmoothPx: Int = 25,
+    /** Finestra media mobile orizzontale sulla baseline (px, motore polyline). */
+    val polylineSmoothPx: Int = 81,
+    /** Pre-filter mediano (px) prima della media mobile, robusto contro outlier puntuali. */
+    val polylineMedianPx: Int = 7,
     /** Tolleranza descender come frazione dell'altezza riga (motore polyline). */
     val polylineDescenderThresh: Double = 0.35,
     val minFeaturesForWarp: Int = 3,

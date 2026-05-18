@@ -449,7 +449,28 @@ object Engine {
             }
             if (ysCol.all { it.isNaN() }) continue
 
-            // Smoothing: media mobile centrata
+            // Pre-filter mediano: rimuove outlier puntuali (punteggiatura, micro-rumore)
+            // mantenendo la curvatura macroscopica della baseline.
+            val medW = maxOf(3, params.polylineMedianPx or 1)
+            if (medW >= 3) {
+                val medHalf = medW / 2
+                val ysSrc = ysCol.copyOf()
+                val window = DoubleArray(medW)
+                for (col in 0 until cw) {
+                    var n = 0
+                    val lo = maxOf(0, col - medHalf); val hi = minOf(cw - 1, col + medHalf)
+                    for (s in lo..hi) {
+                        if (!ysSrc[s].isNaN()) { window[n++] = ysSrc[s] }
+                    }
+                    if (n > 0) {
+                        val slice = window.copyOf(n); slice.sort()
+                        ysCol[col] = slice[n / 2]
+                    }
+                }
+            }
+
+            // Smoothing: media mobile centrata su finestra ampia, per filtrare il
+            // jitter lettera-per-lettera mantenendo la curvatura macro della pagina.
             val smW = maxOf(3, params.polylineSmoothPx or 1)
             val half = smW / 2
             val smoothed = DoubleArray(cw)

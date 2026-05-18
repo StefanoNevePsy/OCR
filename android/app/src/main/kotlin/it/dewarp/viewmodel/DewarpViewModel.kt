@@ -48,6 +48,11 @@ class DewarpViewModel(app: Application) : AndroidViewModel(app) {
     fun setMaxDisplacement(v: Float) {
         _params.value = _params.value.copy(maxDisplacementFrac = v.toDouble())
     }
+    fun setPolylineSmoothPx(v: Float) {
+        // forziamo dispari per il kernel di media mobile
+        val px = v.toInt().coerceAtLeast(3).let { if (it % 2 == 0) it + 1 else it }
+        _params.value = _params.value.copy(polylineSmoothPx = px)
+    }
     fun setSplitTwoUp(v: Boolean) { _splitTwoUp.value = v }
     fun setEngine(name: String) {
         if (name == "polyline" || name == "polynomial") {

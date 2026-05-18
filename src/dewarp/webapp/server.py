@@ -78,6 +78,7 @@ def _run_job(job: Job):
             max_displacement_frac=float(job.options.get("max_displacement_frac", 0.04)),
             poly_degree=int(job.options.get("poly_degree", 2)),
             min_features_for_warp=int(job.options.get("min_features_for_warp", 3)),
+            polyline_smooth_px=max(3, int(job.options.get("polyline_smooth_px", 81)) | 1),
         )
         opts = ProcessOptions(
             dpi=int(job.options.get("dpi", 300)),
@@ -140,6 +141,7 @@ def create_app() -> FastAPI:
         figure_attenuation: float = Form(0.15),
         max_displacement_frac: float = Form(0.04),
         poly_degree: int = Form(2),
+        polyline_smooth_px: int = Form(81),
         dpi: int = Form(300),
         ocr: bool = Form(False),
         ocr_lang: str = Form("ita"),
@@ -164,6 +166,7 @@ def create_app() -> FastAPI:
                 "figure_attenuation": figure_attenuation,
                 "max_displacement_frac": max_displacement_frac,
                 "poly_degree": poly_degree,
+                "polyline_smooth_px": polyline_smooth_px,
                 "dpi": dpi,
                 "ocr": ocr,
                 "ocr_lang": ocr_lang,

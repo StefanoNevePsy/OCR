@@ -96,6 +96,8 @@ document.querySelectorAll(".range input[type=range]").forEach(r => {
     const v = parseFloat(r.value);
     if (r.name === "figure_attenuation" || r.name === "max_displacement_frac") {
       out.textContent = Math.round(v * 100) + "%";
+    } else if (r.name === "polyline_smooth_px") {
+      out.textContent = Math.round(v) + " px";
     } else {
       out.textContent = v;
     }
