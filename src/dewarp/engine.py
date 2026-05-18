@@ -26,9 +26,13 @@ class DewarpParams:
     target_dpi: int = 300                # DPI di lavoro
     min_line_height_px: int = 8          # altezza minima di una riga di testo
     morph_kernel_w: int = 41             # larghezza kernel orizzontale per legare le parole
-    poly_degree: int = 2                 # grado del polinomio di fit per ogni riga
-    min_lines_for_warp: int = 6          # sotto questo numero applichiamo solo deskew
+    poly_degree: int = 2                 # grado massimo del polinomio (puo' essere ridotto adattivamente)
+    min_features_for_warp: int = 3       # sotto questo numero applichiamo solo deskew
+    min_text_lines_full_confidence: int = 6  # da qui in su si usa max_displacement pieno
     max_displacement_frac: float = 0.04  # |map_y - y| viene clampato a frac * h
+    support_feature_weight: float = 0.5  # peso simbolico (non usato come weighted fit)
+    hough_min_len_frac: float = 0.18     # lunghezza minima linea Hough come frazione di w
+    hough_max_slope: float = 0.12        # tan(angolo) massimo per considerarla orizzontale
     figure_attenuation: float = 0.15     # 0 = niente warp sulle figure, 1 = warp pieno
     figure_min_area_frac: float = 0.010  # area minima (frazione pagina) per essere figura
     gutter_search_frac: float = 0.20     # zona di ricerca del gutter attorno al centro
@@ -243,6 +247,75 @@ def _trace_lines(text_mask: np.ndarray, params: DewarpParams) -> list[np.ndarray
     return lines
 
 
+def _hough_horizontal_features(gray: np.ndarray, p: DewarpParams) -> list[np.ndarray]:
+    """Linee Hough quasi-orizzontali (bordi figure, tabelle, decorazioni).
+
+    Ognuna viene espressa nello stesso formato di _trace_lines: array (w,) con la
+    y stimata per ogni colonna nel range della linea, NaN altrove.
+    """
+    h, w = gray.shape
+    edges = cv2.Canny(gray, 60, 160)
+    min_len = max(40, int(w * p.hough_min_len_frac))
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi / 180,
+        threshold=80, minLineLength=min_len, maxLineGap=15,
+    )
+    out: list[np.ndarray] = []
+    if lines is None:
+        return out
+    for ln in lines:
+        x1, y1, x2, y2 = (int(v) for v in ln[0])
+        if x2 < x1:
+            x1, x2 = x2, x1
+            y1, y2 = y2, y1
+        dx = x2 - x1
+        if dx < min_len:
+            continue
+        slope = (y2 - y1) / dx
+        if abs(slope) > p.hough_max_slope:
+            continue
+        ys = np.full(w, np.nan, dtype=np.float64)
+        xs = np.arange(x1, x2 + 1)
+        ys[xs] = y1 + slope * (xs - x1)
+        out.append(ys)
+    return out
+
+
+def _figure_horizontal_edges(gray: np.ndarray, params: DewarpParams) -> list[np.ndarray]:
+    """Top e bottom edge delle figure rilevate. Quando la pagina ha poco testo ma
+    una figura grande, questi bordi sono spesso l'unica fonte di info sul warp.
+    """
+    h, w = gray.shape
+    binary = _binarize(gray)
+    k_big = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
+    blob = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_big)
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(blob, connectivity=8)
+    page_area = h * w
+    feats: list[np.ndarray] = []
+    for i in range(1, num):
+        x, y, cw, ch, area = stats[i]
+        if area < params.figure_min_area_frac * page_area:
+            continue
+        ratio = cw / max(ch, 1)
+        if ratio > 12 or cw < w * 0.10:
+            continue
+        density = area / (cw * ch)
+        if density < 0.35:
+            continue
+        comp = (labels[y:y + ch, x:x + cw] == i)
+        # bordo superiore: per ogni colonna, prima riga attiva
+        col_any = comp.any(axis=0)
+        first_row = comp.argmax(axis=0).astype(np.float64)
+        last_row = (ch - 1) - comp[::-1, :].argmax(axis=0).astype(np.float64)
+        ys_top = np.full(w, np.nan, dtype=np.float64)
+        ys_bot = np.full(w, np.nan, dtype=np.float64)
+        ys_top[x:x + cw][col_any] = y + first_row[col_any]
+        ys_bot[x:x + cw][col_any] = y + last_row[col_any]
+        feats.append(ys_top)
+        feats.append(ys_bot)
+    return feats
+
+
 def _fit_polynomial(ys: np.ndarray, degree: int, width: int) -> np.ndarray:
     """Fitta un polinomio sulle x dove ys non e' NaN; estrapola in modo conservativo.
 
@@ -292,14 +365,54 @@ def dewarp_page(img: np.ndarray, params: Optional[DewarpParams] = None) -> np.nd
 
     h, w = gray_d.shape
     text_mask = _detect_text_mask(gray_d, p)
-    lines = _trace_lines(text_mask, p)
+    text_lines = _trace_lines(text_mask, p)
+    n_text = len(text_lines)
 
-    if len(lines) < p.min_lines_for_warp:
-        # Troppo poche righe: rischiamo distorsioni, ci fermiamo al deskew
+    # Strategia:
+    # - molte righe di testo (>= min_text_lines_full_confidence): usiamo solo loro,
+    #   le support features introdurrebbero rumore e duplicati;
+    # - poche righe ma >= min_features_for_warp: integriamo con Hough e bordi figure,
+    #   deduplicando quelli che cadono vicino a righe esistenti.
+    if n_text >= p.min_text_lines_full_confidence:
+        features = list(text_lines)
+    else:
+        support_hough = _hough_horizontal_features(gray_d, p)
+        support_figs = _figure_horizontal_edges(gray_d, p)
+        features = list(text_lines)
+        existing_means = [float(np.nanmean(f)) for f in features if not np.isnan(np.nanmean(f))]
+        dedup_tol = max(p.min_line_height_px * 1.5, 12)
+        for cand in support_hough + support_figs:
+            cm = np.nanmean(cand)
+            if np.isnan(cm):
+                continue
+            if any(abs(cm - em) < dedup_tol for em in existing_means):
+                continue
+            features.append(cand)
+            existing_means.append(float(cm))
+
+    n_feats = len(features)
+
+    if n_feats < p.min_features_for_warp:
+        # Davvero nulla da raddrizzare: deskew e basta
         return img_d
 
-    # 2. Fit polinomiale di ogni riga
-    polys = np.stack([_fit_polynomial(ys, p.poly_degree, w) for ys in lines], axis=0)
+    # Degree adattivo: parte da 1 e cresce solo se abbiamo abbastanza features
+    if n_feats < 5:
+        adaptive_degree = 1
+    elif n_feats < 9:
+        adaptive_degree = min(2, p.poly_degree)
+    else:
+        adaptive_degree = p.poly_degree
+
+    # Confidence basata sulle righe di testo (le piu' affidabili). Pagine con
+    # solo features di supporto ricevono displacement molto piu' conservativo.
+    text_confidence = min(1.0, n_text / max(p.min_text_lines_full_confidence, 1))
+    feat_confidence = min(1.0, n_feats / 12.0)
+    confidence = 0.35 + 0.65 * (0.6 * text_confidence + 0.4 * feat_confidence)
+    adaptive_max_disp_frac = p.max_displacement_frac * confidence
+
+    # 2. Fit polinomiale di ogni feature
+    polys = np.stack([_fit_polynomial(ys, adaptive_degree, w) for ys in features], axis=0)
     # Ordina per y media (gia' ordinato, ma sicurezza)
     order = np.argsort(polys.mean(axis=1))
     polys = polys[order]
@@ -355,8 +468,9 @@ def dewarp_page(img: np.ndarray, params: Optional[DewarpParams] = None) -> np.nd
     identity = np.tile(y_dst.reshape(-1, 1), (1, w))
     map_y = weight * map_y + (1.0 - weight) * identity
 
-    # 6. Clamp del displacement totale per evitare distorsioni catastrofiche
-    max_disp = p.max_displacement_frac * h
+    # 6. Clamp del displacement totale per evitare distorsioni catastrofiche.
+    #    max_disp dipende dalla confidenza: pagine sparse ricevono un margine stretto.
+    max_disp = adaptive_max_disp_frac * h
     delta = np.clip(map_y - identity, -max_disp, max_disp)
     map_y = identity + delta
 

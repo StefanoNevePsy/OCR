@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dewarp</title>
+<style>
+:root {
+  --paper:   oklch(97.5% 0.012 80);
+  --ink:     oklch(22% 0.022 270);
+  --muted:   oklch(58% 0.014 270);
+  --accent:  oklch(46% 0.13 32);
+}
+html, body { height: 100%; margin: 0; }
+body {
+  display: grid; place-items: center;
+  font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink); background: var(--paper);
+}
+.boot {
+  display: flex; flex-direction: column; align-items: center; gap: 1.5rem;
+  text-align: center;
+}
+.dot {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: conic-gradient(from -90deg, var(--accent) 0 240deg, transparent 240deg 360deg);
+  animation: spin .9s cubic-bezier(.22,1,.36,1) infinite;
+}
+.dot::after {
+  content: ""; position: absolute; inset: 5px; border-radius: 50%;
+  background: var(--paper);
+}
+.dot { position: relative; }
+@keyframes spin { to { transform: rotate(360deg); } }
+h1 {
+  margin: 0; font-family: "Iowan Old Style","Source Serif Pro","Charter",Georgia,serif;
+  font-weight: 500; font-size: 1.5rem; letter-spacing: -0.01em;
+}
+p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+  <div class="boot">
+    <span class="dot" aria-hidden="true"></span>
+    <h1>Dewarp</h1>
+    <p>Avvio del motore in corso...</p>
+  </div>
+</body>
+</html>

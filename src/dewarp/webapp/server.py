@@ -73,7 +73,7 @@ def _run_job(job: Job):
             figure_attenuation=float(job.options.get("figure_attenuation", 0.15)),
             max_displacement_frac=float(job.options.get("max_displacement_frac", 0.04)),
             poly_degree=int(job.options.get("poly_degree", 2)),
-            min_lines_for_warp=int(job.options.get("min_lines_for_warp", 6)),
+            min_features_for_warp=int(job.options.get("min_features_for_warp", 3)),
         )
         opts = ProcessOptions(
             dpi=int(job.options.get("dpi", 300)),

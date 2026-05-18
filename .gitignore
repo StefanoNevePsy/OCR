@@ -9,3 +9,10 @@ dist/
 .DS_Store
 *.swp
 /samples/
+
+# Tauri / Rust
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/
+desktop/node_modules/
+desktop/dist/

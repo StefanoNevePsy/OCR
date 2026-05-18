@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dewarp",
+  "version": "0.1.0",
+  "identifier": "app.dewarp.desktop",
+  "build": {
+    "frontendDist": "../frontend",
+    "devUrl": "http://localhost:8765",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Dewarp",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 880,
+        "minHeight": 620,
+        "resizable": true,
+        "decorations": true,
+        "fullscreen": false,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "shortDescription": "Raddrizza scansioni di libri",
+    "longDescription": "Tool desktop per raddrizzare scansioni di libri in PDF preservando struttura, immagini e ordine.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "externalBin": [
+      "binaries/dewarp-server"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

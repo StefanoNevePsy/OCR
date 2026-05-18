@@ -42,13 +42,33 @@ dewarp --serve --host 0.0.0.0 --port 8765   # accessibile dal tablet sulla stess
 
 Dal tablet apri l'indirizzo del PC nel browser, trascini il PDF, regoli le opzioni, scarichi il risultato. Le anteprime "prima/dopo/affianco" ti permettono di valutare la qualità pagina per pagina.
 
+## App desktop self-contained (Mac, Windows, Linux)
+
+Il progetto include un wrapper Tauri che impacchetta tutto in un'app nativa: nessuna installazione di Python sull'utente finale.
+
+```bash
+# Build completo (PyInstaller sidecar + Tauri bundle):
+./scripts/build_desktop.sh
+```
+
+Output in `desktop/src-tauri/target/release/bundle/`:
+- Linux: `.AppImage`, `.deb`
+- macOS: `.dmg`, `.app`
+- Windows: `.msi`, `.exe`
+
+Architettura:
+- `desktop/src-tauri/`: wrapper Tauri 2 (Rust + WebView nativa OS)
+- `packaging/dewarp_server.spec`: PyInstaller spec, produce `dewarp-server` (binario standalone con Python+OpenCV+Tesseract embedded)
+- All'apertura, il wrapper avvia il sidecar su una porta libera locale, attende che risponda, carica la SPA nella WebView e ferma il sidecar alla chiusura.
+
+Per build cross-platform: ogni piattaforma va buildata sulla rispettiva. CI matrix (GitHub Actions) raccomandata.
+
 ## Uso sul Galaxy Tab S11 (Android)
 
-Tre opzioni in ordine di praticità:
+App Kotlin nativa con OpenCV Android: lavorato in un branch separato (`feature/android-app`). Vedi quel branch per dettagli. Nel frattempo:
 
-1. **Server sul PC, browser sul tablet** (raccomandato). Lancia `dewarp --serve --host 0.0.0.0` sul PC, apri l'IP locale dal tablet. Velocità piena, nessun setup sul tablet.
-2. **Termux nativo**: `pkg install python tesseract poppler libjpeg-turbo` poi `pip install opencv-python-headless pymupdf img2pdf fastapi uvicorn[standard] python-multipart pytesseract`, infine clona il repo e usa il CLI o `--serve` su `localhost`. È lento (alcuni minuti per libro) ma funziona offline.
-3. **App Android nativa**: progetto Kotlin separato, non incluso qui.
+- **Server sul PC, browser sul tablet** (fallback rapido). Lancia `dewarp --serve --host 0.0.0.0` sul PC, apri l'IP locale dal tablet. Nessun setup sul tablet.
+- **Termux nativo**: `pkg install python tesseract poppler libjpeg-turbo` poi `pip install opencv-python-headless pymupdf img2pdf fastapi uvicorn[standard] python-multipart pytesseract`, infine clona il repo e usa il CLI o `--serve` su `localhost`. Lento ma offline.
 
 ## Parametri principali
 
@@ -63,14 +83,30 @@ Tre opzioni in ordine di praticità:
 
 ```
 src/dewarp/
-├── engine.py        algoritmi: split 2-up, deskew, line tracing, fit, remap
-├── pdf_io.py        rendering PDF -> ndarray, scrittura PDF da immagini
-├── pipeline.py      orchestrazione completa, OCR overlay
-├── cli.py           entry point dewarp
+├── engine.py            algoritmi: split 2-up, deskew, line tracing, fit, remap
+├── pdf_io.py            rendering PDF -> ndarray, scrittura PDF da immagini
+├── pipeline.py          orchestrazione completa, OCR overlay
+├── cli.py               entry point dewarp
+├── _sidecar_entry.py    entry point del sidecar per PyInstaller
 └── webapp/
-    ├── server.py    FastAPI: jobs, anteprime, download
-    └── static/      SPA (vanilla JS, no build)
+    ├── server.py        FastAPI: jobs, anteprime, download
+    └── static/          SPA (vanilla JS, no build)
+
+desktop/                 wrapper Tauri 2 (Rust + WebView nativa)
+├── src-tauri/
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   ├── capabilities/
+│   ├── src/lib.rs       avvia sidecar, attende, redirige webview
+│   └── binaries/        sidecar PyInstaller (out di scripts/build_sidecar.sh)
+└── frontend/index.html  splash mentre il sidecar parte
+
+packaging/dewarp_server.spec  PyInstaller spec del sidecar
+scripts/build_sidecar.sh      build solo del sidecar
+scripts/build_desktop.sh      build end-to-end (sidecar + Tauri bundle)
 ```
+
+L'engine adatta `poly_degree` e `max_displacement_frac` al numero di features (righe di testo + linee Hough orizzontali + bordi figure) rilevate sulla pagina, evitando distorsioni catastrofiche su pagine sparse.
 
 ## Limiti noti
 
