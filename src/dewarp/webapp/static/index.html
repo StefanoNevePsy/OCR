@@ -57,6 +57,21 @@
           </label>
 
           <label class="check">
+            <input type="checkbox" name="auto_rotate" checked>
+            <span>Rotazione automatica 90° (pagine scansionate di traverso)</span>
+          </label>
+
+          <label class="select engine-select">
+            <span>Polish baseline (polyline)</span>
+            <select name="polyline_polish_degree">
+              <option value="0">Off &mdash; polyline pura</option>
+              <option value="1" selected>Lineare &mdash; sweet spot (raccomandato)</option>
+              <option value="2">Curvo &mdash; tendenza all'overfit</option>
+            </select>
+            <small>Applica fit polinomiale sulla baseline lisciata. Lineare elimina la wobbliness residua senza distorcere.</small>
+          </label>
+
+          <label class="check">
             <input type="checkbox" name="ocr">
             <span>Aggiungi layer OCR (PDF ricercabile, +1-3 min)</span>
           </label>

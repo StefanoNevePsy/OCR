@@ -60,6 +60,50 @@ object Engine {
         else -> Scalar.all(255.0)
     }
 
+    // ----------------------------- auto-rotate 90 -------------------------- //
+
+    /** Rileva se la pagina e' scansionata a 90 (testo verticale) e ruota in
+     *  senso antiorario per riportarla a orientamento corretto. Euristica:
+     *  se la varianza del profilo per-colonna domina quella per-riga, la
+     *  pagina e' ruotata; altrimenti e' gia' nell'orientamento giusto. */
+    fun autoRotatePage(img: Mat): Mat {
+        val h = img.rows(); val w = img.cols()
+        if (kotlin.math.abs(h - w).toDouble() / kotlin.math.max(h, w) < 0.05) return img.clone()
+
+        val gray = toGray(img)
+        val scale = 600.0 / kotlin.math.max(h, w)
+        val small = Mat()
+        if (scale < 1.0) Imgproc.resize(gray, small, Size(), scale, scale, Imgproc.INTER_AREA)
+        else gray.copyTo(small)
+        gray.release()
+        val bin = binarize(small); small.release()
+
+        val rowSum = Mat(); val colSum = Mat()
+        Core.reduce(bin, rowSum, 1, Core.REDUCE_SUM, CvType.CV_64F)
+        Core.reduce(bin, colSum, 0, Core.REDUCE_SUM, CvType.CV_64F)
+        val bw = bin.cols().toDouble(); val bh = bin.rows().toDouble()
+        bin.release()
+
+        fun variance(m: Mat, normalizer: Double): Double {
+            val arr = DoubleArray(kotlin.math.max(m.rows(), m.cols()))
+            m.get(0, 0, arr)
+            for (i in arr.indices) arr[i] /= normalizer
+            val mean = arr.average()
+            var s = 0.0
+            for (v in arr) s += (v - mean) * (v - mean)
+            return s / arr.size
+        }
+        val hVar = variance(rowSum, bw)
+        val vVar = variance(colSum, bh)
+        rowSum.release(); colSum.release()
+
+        return if (vVar > hVar * 1.3) {
+            val out = Mat()
+            Core.rotate(img, out, Core.ROTATE_90_COUNTERCLOCKWISE)
+            out
+        } else img.clone()
+    }
+
     // ----------------------------- split 2-up ------------------------------ //
 
     fun splitTwoUp(img: Mat, params: DewarpParams = DewarpParams()): List<Mat> {
@@ -481,6 +525,40 @@ object Engine {
                     if (!ysCol[s].isNaN()) { sum += ysCol[s]; cnt++ }
                 }
                 smoothed[col] = if (cnt > 0) sum / cnt else Double.NaN
+            }
+
+            // Polish polinomiale opzionale: fit di grado basso sulla baseline gia' liscia.
+            // Grado 1 (linea retta locale) elimina la wobbliness residua senza overfit.
+            val deg = params.polylinePolishDegree
+            if (deg > 0 && smoothed.size >= deg + 2) {
+                val xc = (cw - 1) / 2.0
+                val xStd = kotlin.math.sqrt(((cw * cw - 1) / 12.0).coerceAtLeast(1.0))
+                val n = cw
+                // Vandermonde normalizzata + Core.solve via SVD
+                val V = Mat(n, deg + 1, CvType.CV_64F)
+                val y = Mat(n, 1, CvType.CV_64F)
+                val rowV = DoubleArray(deg + 1)
+                val rowY = DoubleArray(1)
+                for (i in 0 until n) {
+                    val xn = (i.toDouble() - xc) / xStd
+                    var p = 1.0
+                    for (j in 0..deg) { rowV[j] = p; p *= xn }
+                    V.put(i, 0, *rowV)
+                    rowY[0] = if (smoothed[i].isNaN()) 0.0 else smoothed[i]
+                    y.put(i, 0, *rowY)
+                }
+                val c = Mat()
+                Core.solve(V, y, c, Core.DECOMP_SVD)
+                val coef = DoubleArray(deg + 1)
+                val tmp = DoubleArray(1)
+                for (j in 0..deg) { c.get(j, 0, tmp); coef[j] = tmp[0] }
+                V.release(); y.release(); c.release()
+                for (i in 0 until n) {
+                    val xn = (i.toDouble() - xc) / xStd
+                    var p = 1.0; var s = 0.0
+                    for (j in 0..deg) { s += coef[j] * p; p *= xn }
+                    smoothed[i] = s
+                }
             }
 
             val ysFull = DoubleArray(w) { Double.NaN }

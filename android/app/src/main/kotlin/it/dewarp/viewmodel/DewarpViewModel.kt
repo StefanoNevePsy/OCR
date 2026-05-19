@@ -54,6 +54,10 @@ class DewarpViewModel(app: Application) : AndroidViewModel(app) {
         _params.value = _params.value.copy(polylineSmoothPx = px)
     }
     fun setSplitTwoUp(v: Boolean) { _splitTwoUp.value = v }
+    fun setAutoRotate(v: Boolean) { _params.value = _params.value.copy(autoRotate = v) }
+    fun setPolishDegree(d: Int) {
+        _params.value = _params.value.copy(polylinePolishDegree = d.coerceIn(0, 3))
+    }
     fun setEngine(name: String) {
         if (name == "polyline" || name == "polynomial") {
             _params.value = _params.value.copy(engine = name)
@@ -88,7 +92,11 @@ class DewarpViewModel(app: Application) : AndroidViewModel(app) {
             val pages = ArrayList<Mat>()
             for (i in 0 until total) {
                 _state.value = ScreenState.Processing("pagina ${i + 1}/$total", i, total)
-                val src = reader.renderPage(i, params.targetDpi)
+                var src = reader.renderPage(i, params.targetDpi)
+                if (params.autoRotate) {
+                    val rotated = Engine.autoRotatePage(src)
+                    if (rotated !== src) { src.release(); src = rotated }
+                }
                 val halves = if (split) Engine.splitTwoUp(src, params) else listOf(src.clone())
                 src.release()
                 for (h in halves) {

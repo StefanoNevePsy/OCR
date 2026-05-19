@@ -79,6 +79,8 @@ def _run_job(job: Job):
             poly_degree=int(job.options.get("poly_degree", 2)),
             min_features_for_warp=int(job.options.get("min_features_for_warp", 3)),
             polyline_smooth_px=max(3, int(job.options.get("polyline_smooth_px", 81)) | 1),
+            polyline_polish_degree=int(job.options.get("polyline_polish_degree", 1)),
+            auto_rotate=bool(job.options.get("auto_rotate", True)),
         )
         opts = ProcessOptions(
             dpi=int(job.options.get("dpi", 300)),
@@ -142,6 +144,8 @@ def create_app() -> FastAPI:
         max_displacement_frac: float = Form(0.04),
         poly_degree: int = Form(2),
         polyline_smooth_px: int = Form(81),
+        polyline_polish_degree: int = Form(1),
+        auto_rotate: bool = Form(True),
         dpi: int = Form(300),
         ocr: bool = Form(False),
         ocr_lang: str = Form("ita"),
@@ -167,6 +171,8 @@ def create_app() -> FastAPI:
                 "max_displacement_frac": max_displacement_frac,
                 "poly_degree": poly_degree,
                 "polyline_smooth_px": polyline_smooth_px,
+                "polyline_polish_degree": polyline_polish_degree,
+                "auto_rotate": auto_rotate,
                 "dpi": dpi,
                 "ocr": ocr,
                 "ocr_lang": ocr_lang,

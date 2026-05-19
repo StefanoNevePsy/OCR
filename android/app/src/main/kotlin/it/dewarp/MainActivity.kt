@@ -8,7 +8,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -76,9 +78,11 @@ fun DewarpApp(initialUri: Uri?, vm: DewarpViewModel = viewModel()) {
         if (uri != null && input != null) vm.process(input, uri)
     }
 
+    val scrollState = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(horizontal = 24.dp)
             .padding(top = 48.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -94,7 +98,9 @@ fun DewarpApp(initialUri: Uri?, vm: DewarpViewModel = viewModel()) {
                 onFigureAtt = { vm.setFigureAttenuation(it) },
                 onMaxDisp = { vm.setMaxDisplacement(it) },
                 onSmoothPx = { vm.setPolylineSmoothPx(it) },
+                onPolishDegree = { vm.setPolishDegree(it) },
                 onSplitToggle = { vm.setSplitTwoUp(it) },
+                onAutoRotateToggle = { vm.setAutoRotate(it) },
                 onGpuToggle = { vm.setUseGpu(it) },
                 onEngineChange = { vm.setEngine(it) },
                 onStart = {
@@ -137,7 +143,9 @@ private fun IdleStage(
     onFigureAtt: (Float) -> Unit,
     onMaxDisp: (Float) -> Unit,
     onSmoothPx: (Float) -> Unit,
+    onPolishDegree: (Int) -> Unit,
     onSplitToggle: (Boolean) -> Unit,
+    onAutoRotateToggle: (Boolean) -> Unit,
     onGpuToggle: (Boolean) -> Unit,
     onEngineChange: (String) -> Unit,
     onStart: () -> Unit,
@@ -154,7 +162,9 @@ private fun IdleStage(
             onFigureAtt = onFigureAtt,
             onMaxDisp = onMaxDisp,
             onSmoothPx = onSmoothPx,
+            onPolishDegree = onPolishDegree,
             onSplitToggle = onSplitToggle,
+            onAutoRotateToggle = onAutoRotateToggle,
             onGpuToggle = onGpuToggle,
             onEngineChange = onEngineChange,
         )
@@ -212,7 +222,9 @@ private fun OptionsCard(
     onFigureAtt: (Float) -> Unit,
     onMaxDisp: (Float) -> Unit,
     onSmoothPx: (Float) -> Unit,
+    onPolishDegree: (Int) -> Unit,
     onSplitToggle: (Boolean) -> Unit,
+    onAutoRotateToggle: (Boolean) -> Unit,
     onGpuToggle: (Boolean) -> Unit,
     onEngineChange: (String) -> Unit,
 ) {
@@ -249,7 +261,16 @@ private fun OptionsCard(
                 valueLabel = "${params.polylineSmoothPx} px",
                 onChange = onSmoothPx,
             )
+            PolishDegreeRow(
+                current = params.polylinePolishDegree,
+                onChange = onPolishDegree,
+            )
         }
+        SwitchRow(
+            label = "Rotazione automatica 90°",
+            checked = params.autoRotate,
+            onChange = onAutoRotateToggle,
+        )
         SwitchRow(
             label = "Spezza pagine doppie sul gutter",
             checked = splitTwoUp,
@@ -259,6 +280,27 @@ private fun OptionsCard(
             label = "Usa GPU (sperimentale)",
             checked = params.useGpu,
             onChange = onGpuToggle,
+        )
+    }
+}
+
+@Composable
+private fun PolishDegreeRow(current: Int, onChange: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Polish baseline", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = current == 0, onClick = { onChange(0) }, label = { Text("Off") })
+            FilterChip(selected = current == 1, onClick = { onChange(1) }, label = { Text("Lineare") })
+            FilterChip(selected = current == 2, onClick = { onChange(2) }, label = { Text("Curvo") })
+        }
+        Text(
+            text = when (current) {
+                0 -> "Polyline pura. Segue il dato letteralmente."
+                1 -> "Linea retta locale sulla baseline lisciata. Sweet spot: elimina wobble residuo."
+                else -> "Parabola locale. Tendenzialmente overfitta i residui."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -334,6 +376,7 @@ private fun ProcessingStage(s: ScreenState.Processing) {
 
 @Composable
 private fun DoneStage(s: ScreenState.Done, onReset: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -348,10 +391,27 @@ private fun DoneStage(s: ScreenState.Done, onReset: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = {
+                    val view = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(s.outputUri, "application/pdf")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    val chooser = Intent.createChooser(view, "Apri PDF con")
+                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try {
+                        context.startActivity(chooser)
+                    } catch (_: android.content.ActivityNotFoundException) { }
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Apri PDF")
+            }
             FilledTonalButton(onClick = onReset, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Outlined.Refresh, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Nuovo PDF")
+                Text("Nuovo")
             }
         }
     }

@@ -20,8 +20,14 @@ data class DewarpParams(
     val polylineSmoothPx: Int = 81,
     /** Pre-filter mediano (px) prima della media mobile, robusto contro outlier puntuali. */
     val polylineMedianPx: Int = 7,
+    /** Polish polinomiale sulla baseline gia' smussata (motore polyline).
+     *  0 = polyline pura. 1 = linea retta locale (raccomandato, sweet spot).
+     *  Gradi >=2 tendono a oscillare sui residui. */
+    val polylinePolishDegree: Int = 1,
     /** Tolleranza descender come frazione dell'altezza riga (motore polyline). */
     val polylineDescenderThresh: Double = 0.35,
+    /** Se true, rileva pagine scansionate a 90 e le ruota prima del deskew. */
+    val autoRotate: Boolean = true,
     val minFeaturesForWarp: Int = 3,
     val minTextLinesFullConfidence: Int = 6,
     /** Tetto al displacement totale, in frazione dell'altezza pagina. */

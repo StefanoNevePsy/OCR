@@ -51,8 +51,16 @@ class DewarpParams:
     polyline_median_px: int = 7          # pre-filter mediano prima della media mobile,
                                          # robusto contro outlier puntuali (es. punteggiatura
                                          #  che il filtro descender non ha pescato)
+    polyline_polish_degree: int = 1      # se > 0, fit polinomiale di questo grado sulla
+                                         #  baseline GIA' smussata. Grado 1 (linea retta
+                                         #  locale) e' il sweet spot: elimina la wobbliness
+                                         #  residua senza overfittare le micro-variazioni.
+                                         #  Grado 2+ tende a oscillare sui residui.
+                                         #  0 = polyline pura
     polyline_descender_thresh: float = 0.35  # tolleranza per scartare descender (g, p, q)
                                              # come frazione dell'altezza riga
+    auto_rotate: bool = True             # se True, rileva pagine scansionate a 90 e le ruota
+                                         #  prima del deskew (projection profile)
     figure_attenuation: float = 0.15     # 0 = niente warp sulle figure, 1 = warp pieno
     figure_min_area_frac: float = 0.010  # area minima (frazione pagina) per essere figura
     figure_skip_edges_area_frac: float = 0.18  # figure piu' grandi: bordi NON usati come features
@@ -84,6 +92,43 @@ def _binarize(gray: np.ndarray) -> np.ndarray:
         gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, bs, 15
     )
     return th
+
+
+# ----------------------------- auto-rotate 90 ----------------------------- #
+
+def auto_rotate_page(img: np.ndarray) -> np.ndarray:
+    """Rileva se la pagina e' scansionata ruotata di 90 e la raddrizza.
+
+    Euristica via projection profile: in una pagina con testo orizzontale,
+    sommare i pixel di inchiostro per RIGA produce un profilo con picchi
+    netti (righe di testo) e valli (interlinea) -> varianza alta. Se la
+    pagina e' ruotata di 90, l'inverso: e' il profilo per COLONNA ad avere
+    varianza alta. Confrontiamo le due varianze normalizzate.
+
+    Non distinguiamo 90 da 270 (la differenza richiederebbe rilevare
+    descender vs ascender). Ruotiamo sempre in senso antiorario; se il
+    risultato fosse capovolto, l'utente puo' sempre rieseguire o disabilitare.
+    """
+    h, w = img.shape[:2]
+    # Aspect quasi quadrato: poco affidabile, lasciamo stare
+    if abs(h - w) / max(h, w) < 0.05:
+        return img
+    gray = _to_gray(img)
+    # Downsample per velocita'
+    scale = 600 / max(h, w)
+    if scale < 1:
+        small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    else:
+        small = gray
+    binary = _binarize(small)
+    # Normalizziamo per la lunghezza degli assi: varianza grezza favorirebbe l'asse piu' lungo
+    row_profile = binary.sum(axis=1).astype(np.float64) / binary.shape[1]
+    col_profile = binary.sum(axis=0).astype(np.float64) / binary.shape[0]
+    h_var = row_profile.var()
+    v_var = col_profile.var()
+    if v_var > h_var * 1.3:
+        return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return img
 
 
 # ----------------------------- split 2-up sul gutter ----------------------------- #
@@ -487,6 +532,18 @@ def _extract_baselines(
         sm_w = max(3, params.polyline_smooth_px | 1)  # dispari
         kernel = np.ones(sm_w, dtype=np.float64) / sm_w
         smoothed = np.convolve(filled, kernel, mode="same")
+
+        # Polish polinomiale (opzionale): fit di grado basso sulla baseline gia'
+        # smussata. Elimina la wobbliness residua dovuta a piedi di lettere con
+        # forme diverse (i, j, ., ,) che la media mobile non riesce a smussare
+        # completamente. La baseline pulita rende il fit stabile (non oscilla).
+        if params.polyline_polish_degree > 0 and smoothed.size >= params.polyline_polish_degree + 2:
+            deg = min(params.polyline_polish_degree, 3)
+            xs = np.arange(smoothed.size, dtype=np.float64)
+            xc = xs.mean(); xs_std = xs.std() or 1.0
+            xn = (xs - xc) / xs_std
+            coef = np.polyfit(xn, smoothed, deg)
+            smoothed = np.polyval(coef, xn)
 
         # Promuovi alla larghezza piena della pagina, NaN al di fuori
         ys_full = np.full(w, np.nan, dtype=np.float64)

@@ -12,7 +12,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
-from .engine import DewarpParams, dewarp_page, split_two_up
+from .engine import DewarpParams, auto_rotate_page, dewarp_page, split_two_up
 from .pdf_io import images_to_pdf, render_pdf_pages
 
 log = logging.getLogger(__name__)
@@ -96,6 +96,9 @@ def process_pdf(
     # Costruisce una lista di "tasks" (idx, half) preservando l'ordine.
     tasks: list[tuple[int, "np.ndarray"]] = []
     for i, page_img in enumerate(rendered):
+        # Auto-rotazione di pagine scansionate a 90 (prima del split)
+        if opts.params.auto_rotate:
+            page_img = auto_rotate_page(page_img)
         halves = split_two_up(page_img, opts.params) if opts.split_two_up else [page_img]
         for half in halves:
             tasks.append((i, half))
