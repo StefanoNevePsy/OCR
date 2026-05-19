@@ -129,9 +129,14 @@ fun DewarpApp(initialUri: Uri?, vm: DewarpViewModel = viewModel()) {
             is ScreenState.PreviewBuilding -> PreviewBuildingStage(s)
             is ScreenState.Preview -> PreviewStage(
                 state = s,
+                params = params,
                 onIndexChange = { vm.setPreviewIndex(it) },
                 onCornerDrag = { idx, x, y -> vm.updateCorner(s.currentIndex, idx, x, y) },
                 onResetCorners = { vm.resetCornersAuto(s.currentIndex) },
+                onSmoothPx = { vm.setPolylineSmoothPx(it) },
+                onPolishDegree = { vm.setPolishDegree(it) },
+                onEngineChange = { vm.setEngine(it) },
+                onParamsChanged = { vm.recomputeCurrentPageBaselines() },
                 onConfirm = { createPdf.launch("dewarped.pdf") },
                 onCancel = { vm.reset() },
             )
@@ -419,14 +424,29 @@ private fun PreviewBuildingStage(s: ScreenState.PreviewBuilding) {
 @Composable
 private fun PreviewStage(
     state: ScreenState.Preview,
+    params: it.dewarp.engine.DewarpParams,
     onIndexChange: (Int) -> Unit,
     onCornerDrag: (cornerIdx: Int, x: Float, y: Float) -> Unit,
     onResetCorners: () -> Unit,
+    onSmoothPx: (Float) -> Unit,
+    onPolishDegree: (Int) -> Unit,
+    onEngineChange: (String) -> Unit,
+    onParamsChanged: () -> Unit,
     onConfirm: () -> Unit,
     onCancel: () -> Unit,
 ) {
     if (state.pages.isEmpty()) return
     val page = state.pages[state.currentIndex]
+
+    // Debounce: dopo che gli slider hanno smesso di muoversi per 300ms,
+    // ricalcoliamo le polyline della pagina corrente con i nuovi parametri.
+    val firstRun = remember { mutableStateOf(true) }
+    LaunchedEffect(params.engine, params.polylineSmoothPx, params.polylinePolishDegree, state.currentIndex) {
+        if (firstRun.value) { firstRun.value = false; return@LaunchedEffect }
+        kotlinx.coroutines.delay(300)
+        onParamsChanged()
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -463,17 +483,26 @@ private fun PreviewStage(
                 onClick = { onIndexChange((state.currentIndex - 1).coerceAtLeast(0)) },
                 enabled = state.currentIndex > 0,
                 modifier = Modifier.weight(1f),
-            ) { Text("◀ Precedente") }
+            ) { Text("◀ Prec.") }
             FilledTonalButton(
                 onClick = onResetCorners,
                 modifier = Modifier.weight(1f),
-            ) { Text("Reset auto") }
+            ) { Text("Reset crop") }
             FilledTonalButton(
                 onClick = { onIndexChange((state.currentIndex + 1).coerceAtMost(state.pages.size - 1)) },
                 enabled = state.currentIndex < state.pages.size - 1,
                 modifier = Modifier.weight(1f),
-            ) { Text("Successiva ▶") }
+            ) { Text("Succ. ▶") }
         }
+
+        // Card parametri live (polyline si aggiornano al volo)
+        PreviewParamsCard(
+            params = params,
+            onSmoothPx = onSmoothPx,
+            onPolishDegree = onPolishDegree,
+            onEngineChange = onEngineChange,
+        )
+
         // Conferma / annulla
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
@@ -487,10 +516,62 @@ private fun PreviewStage(
             ) { Text("Processa tutto") }
         }
         Text(
-            "Trascina i 4 cerchi rossi per regolare il crop. Le polyline azzurre mostrano le righe rilevate.",
+            "Trascina i 4 cerchi rossi per il crop. Le polyline azzurre mostrano dove l'engine rilevera' le righe; muovi gli slider e guarda come cambiano in tempo reale.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun PreviewParamsCard(
+    params: it.dewarp.engine.DewarpParams,
+    onSmoothPx: (Float) -> Unit,
+    onPolishDegree: (Int) -> Unit,
+    onEngineChange: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            "Parametri (live)",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = params.engine == "polynomial",
+                onClick = { onEngineChange("polynomial") },
+                label = { Text("Polinomiale") },
+            )
+            FilterChip(
+                selected = params.engine == "polyline",
+                onClick = { onEngineChange("polyline") },
+                label = { Text("Polyline") },
+            )
+        }
+        if (params.engine == "polyline") {
+            SliderRow(
+                label = "Smoothing baseline",
+                value = params.polylineSmoothPx.toFloat(),
+                valueRange = 11f..251f,
+                valueLabel = "${params.polylineSmoothPx} px",
+                onChange = onSmoothPx,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Polish:", style = MaterialTheme.typography.bodyMedium)
+                FilterChip(selected = params.polylinePolishDegree == 0,
+                    onClick = { onPolishDegree(0) }, label = { Text("Off") })
+                FilterChip(selected = params.polylinePolishDegree == 1,
+                    onClick = { onPolishDegree(1) }, label = { Text("Lineare") })
+                FilterChip(selected = params.polylinePolishDegree == 2,
+                    onClick = { onPolishDegree(2) }, label = { Text("Curvo") })
+            }
+        }
     }
 }
 

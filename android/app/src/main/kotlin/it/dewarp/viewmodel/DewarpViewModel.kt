@@ -164,6 +164,40 @@ class DewarpViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = s.copy(pages = newPages)
     }
 
+    private var recomputeJob: Job? = null
+
+    /** Ricalcola le polyline per la pagina corrente usando i params attuali.
+     *  Chiamato dalla UI quando l'utente cambia slider smoothing/polish:
+     *  il caller deve fare debouncing per evitare di re-launchare a ogni
+     *  pixel di drag dello slider. */
+    fun recomputeCurrentPageBaselines() {
+        val s = _state.value as? ScreenState.Preview ?: return
+        val pageIdx = s.currentIndex
+        val page = s.pages.getOrNull(pageIdx) ?: return
+        val params = _params.value
+        recomputeJob?.cancel()
+        recomputeJob = viewModelScope.launch(Dispatchers.Default) {
+            val mat = Mat()
+            Utils.bitmapToMat(page.bitmap, mat)
+            val w = mat.cols().toFloat(); val h = mat.rows().toFloat()
+            val bls = try {
+                Engine.extractBaselinesForPreview(mat, params)
+            } finally {
+                mat.release()
+            }
+            val blsNorm = bls.map { pb ->
+                pb.points.map { (px, py) -> (px / w).toFloat() to (py / h).toFloat() }
+            }
+            // Atomic update: solo se siamo ancora sulla stessa pagina
+            val cur = _state.value as? ScreenState.Preview ?: return@launch
+            if (cur.currentIndex != pageIdx) return@launch
+            val newPages = cur.pages.toMutableList().also {
+                it[pageIdx] = it[pageIdx].copy(baselines = blsNorm)
+            }
+            _state.value = cur.copy(pages = newPages)
+        }
+    }
+
     fun resetCornersAuto(pageIdx: Int) {
         val s = _state.value
         if (s !is ScreenState.Preview || pageIdx !in s.pages.indices) return
