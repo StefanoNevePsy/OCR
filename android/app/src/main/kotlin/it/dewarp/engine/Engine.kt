@@ -66,6 +66,138 @@ object Engine {
      *  senso antiorario per riportarla a orientamento corretto. Euristica:
      *  se la varianza del profilo per-colonna domina quella per-riga, la
      *  pagina e' ruotata; altrimenti e' gia' nell'orientamento giusto. */
+    // ----------------------------- page crop detection -------------------- //
+
+    /** Rileva i 4 corner della pagina nello scanner, ordinati TL, TR, BR, BL.
+     *  Ritorna i 4 corner dell'immagine intera (no crop) se la detection fallisce. */
+    fun detectPageQuad(img: Mat): Array<DoubleArray> {
+        val h = img.rows(); val w = img.cols()
+        val gray = toGray(img)
+        val thr = Mat()
+        Imgproc.threshold(gray, thr, 0.0, 255.0, Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU)
+        gray.release()
+        val k = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(15.0, 15.0))
+        val closed = Mat()
+        Imgproc.morphologyEx(thr, closed, Imgproc.MORPH_CLOSE, k)
+        thr.release(); k.release()
+        val contours = ArrayList<MatOfPoint>()
+        val hier = Mat()
+        Imgproc.findContours(closed, contours, hier, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+        closed.release(); hier.release()
+        if (contours.isEmpty()) return fullQuad(w, h)
+        val cnt = contours.maxByOrNull { Imgproc.contourArea(it) }!!
+        if (Imgproc.contourArea(cnt) < 0.3 * w * h) {
+            contours.forEach { it.release() }
+            return fullQuad(w, h)
+        }
+        val peri = Imgproc.arcLength(org.opencv.core.MatOfPoint2f(*cnt.toArray()), true)
+        val approx = org.opencv.core.MatOfPoint2f()
+        Imgproc.approxPolyDP(org.opencv.core.MatOfPoint2f(*cnt.toArray()), approx, 0.02 * peri, true)
+        val pts = if (approx.total() == 4L) {
+            approx.toArray().map { doubleArrayOf(it.x, it.y) }.toTypedArray()
+        } else {
+            val rect = Imgproc.minAreaRect(org.opencv.core.MatOfPoint2f(*cnt.toArray()))
+            val box = Array(4) { org.opencv.core.Point() }
+            rect.points(box)
+            box.map { doubleArrayOf(it.x, it.y) }.toTypedArray()
+        }
+        approx.release()
+        contours.forEach { it.release() }
+        return orderQuad(pts)
+    }
+
+    private fun fullQuad(w: Int, h: Int): Array<DoubleArray> = arrayOf(
+        doubleArrayOf(0.0, 0.0), doubleArrayOf(w.toDouble(), 0.0),
+        doubleArrayOf(w.toDouble(), h.toDouble()), doubleArrayOf(0.0, h.toDouble()),
+    )
+
+    private fun orderQuad(pts: Array<DoubleArray>): Array<DoubleArray> {
+        val s = pts.map { it[0] + it[1] }
+        val diff = pts.map { it[0] - it[1] }
+        return arrayOf(
+            pts[s.indexOf(s.min())],     // TL: somma min
+            pts[diff.indexOf(diff.min())],  // TR: x-y min (forte x positiva, y neg)
+            pts[s.indexOf(s.max())],     // BR: somma max
+            pts[diff.indexOf(diff.max())],  // BL: x-y max
+        )
+    }
+
+    /** Perspective warp che porta i 4 corner di `corners` (TL, TR, BR, BL)
+     *  sui 4 corner di un rettangolo. */
+    fun applyPageCrop(img: Mat, corners: Array<DoubleArray>): Mat {
+        val tl = corners[0]; val tr = corners[1]; val br = corners[2]; val bl = corners[3]
+        fun dist(a: DoubleArray, b: DoubleArray): Double {
+            val dx = a[0] - b[0]; val dy = a[1] - b[1]
+            return kotlin.math.sqrt(dx * dx + dy * dy)
+        }
+        val wTop = dist(tr, tl); val wBot = dist(br, bl)
+        val hLeft = dist(bl, tl); val hRight = dist(br, tr)
+        val outW = kotlin.math.max(wTop, wBot).toInt()
+        val outH = kotlin.math.max(hLeft, hRight).toInt()
+        if (outW < 10 || outH < 10) return img.clone()
+        val src = org.opencv.core.MatOfPoint2f(
+            org.opencv.core.Point(tl[0], tl[1]), org.opencv.core.Point(tr[0], tr[1]),
+            org.opencv.core.Point(br[0], br[1]), org.opencv.core.Point(bl[0], bl[1]),
+        )
+        val dst = org.opencv.core.MatOfPoint2f(
+            org.opencv.core.Point(0.0, 0.0), org.opencv.core.Point((outW - 1).toDouble(), 0.0),
+            org.opencv.core.Point((outW - 1).toDouble(), (outH - 1).toDouble()),
+            org.opencv.core.Point(0.0, (outH - 1).toDouble()),
+        )
+        val M = Imgproc.getPerspectiveTransform(src, dst)
+        src.release(); dst.release()
+        val out = Mat()
+        Imgproc.warpPerspective(img, out, M, Size(outW.toDouble(), outH.toDouble()),
+            Imgproc.INTER_CUBIC, Core.BORDER_CONSTANT, whiteScalar(img))
+        M.release()
+        return out
+    }
+
+    // ----------------------------- baseline extraction for preview --------- //
+
+    data class PreviewBaseline(val meanY: Double, val points: List<Pair<Double, Double>>)
+
+    /** Restituisce le polyline (baseline lisciate) per la pagina, samplate
+     *  con risoluzione contenuta (max ~50 punti per polyline) cosi' la UI
+     *  puo' disegnarle e l'utente puo' eventualmente modificarle. */
+    fun extractBaselinesForPreview(img: Mat, params: DewarpParams = DewarpParams()): List<PreviewBaseline> {
+        val gray = toGray(img)
+        val binary = binarize(gray)
+        val textMask = detectTextMask(gray, params)
+        val baselines = extractBaselines(textMask, binary, params)
+        binary.release(); textMask.release()
+        val h = gray.rows(); val w = gray.cols()
+        gray.release()
+        val step = kotlin.math.max(8, w / 50)
+        val out = ArrayList<PreviewBaseline>()
+        for (bl in baselines) {
+            var firstIdx = -1; var lastIdx = -1
+            for (j in 0 until w) {
+                if (!bl[j].isNaN()) {
+                    if (firstIdx < 0) firstIdx = j
+                    lastIdx = j
+                }
+            }
+            if (firstIdx < 0 || lastIdx == firstIdx) continue
+            val pts = ArrayList<Pair<Double, Double>>()
+            var x = firstIdx
+            while (x <= lastIdx) {
+                if (!bl[x].isNaN()) pts.add(x.toDouble() to bl[x])
+                x += step
+            }
+            if (!bl[lastIdx].isNaN() && pts.lastOrNull()?.first?.toInt() != lastIdx) {
+                pts.add(lastIdx.toDouble() to bl[lastIdx])
+            }
+            if (pts.isEmpty()) continue
+            val mean = pts.sumOf { it.second } / pts.size
+            out.add(PreviewBaseline(mean, pts))
+        }
+        out.sortBy { it.meanY }
+        return out
+    }
+
+    // ----------------------------- auto-rotate 90 -------------------------- //
+
     fun autoRotatePage(img: Mat): Mat {
         val h = img.rows(); val w = img.cols()
         if (kotlin.math.abs(h - w).toDouble() / kotlin.math.max(h, w) < 0.05) return img.clone()

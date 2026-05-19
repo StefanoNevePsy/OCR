@@ -94,6 +94,121 @@ def _binarize(gray: np.ndarray) -> np.ndarray:
     return th
 
 
+# ----------------------------- page crop detection ----------------------------- #
+
+def detect_page_quad(img: np.ndarray) -> np.ndarray:
+    """Rileva i 4 corner della pagina (ordinati TL, TR, BR, BL) come float32.
+
+    Strategia: binarizza con threshold inverso (la pagina e' chiara, lo sfondo
+    dello scanner e' scuro), trova il contour piu' grande, approssima a un
+    quadrilatero. Se l'approssimazione non e' un quadrilatero pulito, ritorna
+    il bounding box dell'immagine intera (no crop).
+    """
+    h, w = img.shape[:2]
+    gray = _to_gray(img)
+    # Threshold inverso: pagina chiara -> bianco, scanner scuro -> nero
+    _, thr = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Morfologia per chiudere piccoli buchi interni (testo)
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    closed = cv2.morphologyEx(thr, cv2.MORPH_CLOSE, k)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return _full_image_quad(w, h)
+    # Prendi il contour piu' grande
+    cnt = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(cnt) < 0.3 * w * h:
+        # La pagina copre meno del 30% dell'area: detection inaffidabile
+        return _full_image_quad(w, h)
+    # Approssima a poligono con tolleranza ~2% del perimetro
+    peri = cv2.arcLength(cnt, True)
+    approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+    if len(approx) == 4:
+        pts = approx.reshape(4, 2).astype(np.float32)
+        return _order_quad(pts)
+    # Fallback: minAreaRect
+    rect = cv2.minAreaRect(cnt)
+    box = cv2.boxPoints(rect).astype(np.float32)
+    return _order_quad(box)
+
+
+def _full_image_quad(w: int, h: int) -> np.ndarray:
+    return np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
+
+
+def _order_quad(pts: np.ndarray) -> np.ndarray:
+    """Ordina 4 punti in ordine TL, TR, BR, BL."""
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).flatten()
+    return np.array([
+        pts[np.argmin(s)],      # top-left: somma minima
+        pts[np.argmin(diff)],   # top-right: x-y minima (x grande, y piccola)
+        pts[np.argmax(s)],      # bottom-right: somma massima
+        pts[np.argmax(diff)],   # bottom-left: x-y massima
+    ], dtype=np.float32)
+
+
+def apply_page_crop(img: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Applica un perspective warp che porta i 4 corner sui 4 corner di un
+    rettangolo. Le dimensioni del rettangolo sono la media delle lunghezze
+    dei lati opposti del quadrilatero originale.
+    """
+    corners = np.asarray(corners, dtype=np.float32).reshape(4, 2)
+    tl, tr, br, bl = corners
+    w_top = np.linalg.norm(tr - tl)
+    w_bot = np.linalg.norm(br - bl)
+    h_left = np.linalg.norm(bl - tl)
+    h_right = np.linalg.norm(br - tr)
+    out_w = int(round(max(w_top, w_bot)))
+    out_h = int(round(max(h_left, h_right)))
+    if out_w < 10 or out_h < 10:
+        return img
+    dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]],
+                   dtype=np.float32)
+    M = cv2.getPerspectiveTransform(corners, dst)
+    bv = (255,) * (1 if img.ndim == 2 else img.shape[2])
+    return cv2.warpPerspective(img, M, (out_w, out_h),
+                               flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT,
+                               borderValue=bv)
+
+
+# ----------------------------- baseline extraction for preview ----------------------------- #
+
+def extract_baselines_for_preview(img: np.ndarray,
+                                  params: Optional[DewarpParams] = None) -> list[dict]:
+    """Restituisce le polyline (baseline lisciate) di ogni riga di testo
+    rilevata nella pagina. Per la UI: e' molto piu' leggero del dewarp completo.
+
+    Ritorna una lista di dict:
+       { "mean_y": float, "points": [(x, y), ...] }
+    dove `points` e' la baseline samplata ogni N pixel sulla larghezza pagina.
+    """
+    p = params or DewarpParams()
+    gray = _to_gray(img)
+    binary = _binarize(gray)
+    text_mask = _detect_text_mask(gray, p)
+    baselines = _extract_baselines(text_mask, binary, p)
+    h, w = gray.shape
+    out = []
+    # Sample ogni ~2% della larghezza per ridurre i punti (max ~50 punti per polyline)
+    step = max(8, w // 50)
+    for bl in baselines:
+        valid = ~np.isnan(bl)
+        if valid.sum() < 2:
+            continue
+        idx = np.where(valid)[0]
+        xmin, xmax = int(idx[0]), int(idx[-1])
+        sample_x = list(range(xmin, xmax + 1, step))
+        if sample_x[-1] != xmax:
+            sample_x.append(xmax)
+        points = [(float(x), float(bl[x])) for x in sample_x if not np.isnan(bl[x])]
+        if not points:
+            continue
+        mean_y = sum(y for _, y in points) / len(points)
+        out.append({"mean_y": mean_y, "points": points})
+    out.sort(key=lambda d: d["mean_y"])
+    return out
+
+
 # ----------------------------- auto-rotate 90 ----------------------------- #
 
 def auto_rotate_page(img: np.ndarray) -> np.ndarray:
