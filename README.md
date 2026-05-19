@@ -69,7 +69,7 @@ In `android/`: app Kotlin con Jetpack Compose, OpenCV Android e PdfBox-Android. 
 
 ```bash
 cd android
-./gradlew :app:assembleRelease   # APK unsigned in app/build/outputs/apk/release/
+./gradlew :app:assembleRelease   # APK firmato in app/build/outputs/apk/release/
 ./gradlew :app:installDebug      # build + push su device connesso (debug)
 ```
 
@@ -81,6 +81,8 @@ Funzionalità:
 - Opzione GPU (sperimentale, placeholder per UMat/OpenCL futuro)
 
 Min SDK 26 (Android 8). Build su `compileSdk = 35`, AGP 8.7, Kotlin 2.0, Compose BoM 2024.12, OpenCV 4.10 da Maven Central.
+
+**Firma APK**: `android/app/release.jks` è committata nel repo (password `dewarp-release`, alias `dewarp`). Tutte le build CI usano questa keystore, quindi gli APK si installano come update sopra le versioni precedenti senza disinstallare. Per la pubblicazione su Play Store serve sostituire con una keystore privata in GitHub Secret.
 
 ## CI
 

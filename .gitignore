@@ -28,4 +28,7 @@ android/captures/
 android/.cxx/
 *.iml
 *.hprof
+# NB: la release.jks committata e' intenzionale (firma stabile per gli update
+# dell'APK dalla CI). Vedi android/app/build.gradle.kts.
 *.keystore
+!android/app/release.jks

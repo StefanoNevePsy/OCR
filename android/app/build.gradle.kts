@@ -27,13 +27,25 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            // Keystore committata nel repo: serve a far si' che ogni build prodotta
+            // dalla CI sia firmata con la STESSA chiave, e quindi gli APK siano
+            // installabili come update sopra le versioni precedenti.
+            // Trade-off: chiunque accede al repo puo' firmare APK come "dewarp".
+            // OK per uso personale / sideload; per Play Store servirebbe una
+            // keystore separata in GitHub Secret.
+            storeFile = file("release.jks")
+            storePassword = "dewarp-release"
+            keyAlias = "dewarp"
+            keyPassword = "dewarp-release"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Firma il release con la keystore di debug auto-generata da AGP cosi'
-            // gli APK sono installabili senza setup extra (sideload pre-Play Store).
-            // Sostituire con una signingConfig dedicata prima della pubblicazione.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
