@@ -25,7 +25,7 @@ data class DewarpParams(
      *  Gradi >=2 tendono a oscillare sui residui. */
     val polylinePolishDegree: Int = 1,
     /** Tolleranza descender come frazione dell'altezza riga (motore polyline). */
-    val polylineDescenderThresh: Double = 0.35,
+    val polylineDescenderThresh: Double = 0.15,
     /** Se true, rileva pagine scansionate a 90 e le ruota prima del deskew. */
     val autoRotate: Boolean = true,
     val minFeaturesForWarp: Int = 3,

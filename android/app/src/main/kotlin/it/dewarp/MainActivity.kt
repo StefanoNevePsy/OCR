@@ -23,6 +23,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.UnfoldLess
+import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
@@ -438,8 +440,11 @@ private fun PreviewStage(
     if (state.pages.isEmpty()) return
     val page = state.pages[state.currentIndex]
 
-    // Debounce: dopo che gli slider hanno smesso di muoversi per 300ms,
-    // ricalcoliamo le polyline della pagina corrente con i nuovi parametri.
+    // Toggle dei controlli (utile quando si lavora zoomato e si vuole massimizzare
+    // lo spazio per la pagina). Quando nascosti, restano comunque visibili
+    // header + navigazione minimale + un tasto "Processa".
+    var controlsVisible by remember { mutableStateOf(true) }
+
     val firstRun = remember { mutableStateOf(true) }
     LaunchedEffect(params.engine, params.polylineSmoothPx, params.polylinePolishDegree, state.currentIndex) {
         if (firstRun.value) { firstRun.value = false; return@LaunchedEffect }
@@ -447,7 +452,8 @@ private fun PreviewStage(
         onParamsChanged()
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Header: numero pagina + n. righe + toggle controlli (SEMPRE visibile)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "Pagina ${state.currentIndex + 1} / ${state.pages.size}",
@@ -455,11 +461,20 @@ private fun PreviewStage(
                 modifier = Modifier.weight(1f),
             )
             Text(
-                "${page.baselines.size} righe rilevate",
+                "${page.baselines.size} righe",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 8.dp),
             )
+            IconButton(onClick = { controlsVisible = !controlsVisible }) {
+                Icon(
+                    if (controlsVisible) Icons.Outlined.UnfoldLess else Icons.Outlined.UnfoldMore,
+                    contentDescription = if (controlsVisible) "Nascondi controlli" else "Mostra controlli",
+                )
+            }
         }
+
+        // Anteprima pagina (sempre visibile, prende piu' spazio quando i controlli sono nascosti)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -477,49 +492,46 @@ private fun PreviewStage(
                 modifier = Modifier.matchParentSize(),
             )
         }
-        // Navigazione + reset
+
+        // Navigazione + Processa: sempre visibile (la cosa che serve sempre)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilledTonalButton(
                 onClick = { onIndexChange((state.currentIndex - 1).coerceAtLeast(0)) },
                 enabled = state.currentIndex > 0,
-                modifier = Modifier.weight(1f),
-            ) { Text("◀ Prec.") }
-            FilledTonalButton(
-                onClick = onResetCorners,
-                modifier = Modifier.weight(1f),
-            ) { Text("Reset crop") }
+            ) { Text("◀") }
             FilledTonalButton(
                 onClick = { onIndexChange((state.currentIndex + 1).coerceAtMost(state.pages.size - 1)) },
                 enabled = state.currentIndex < state.pages.size - 1,
-                modifier = Modifier.weight(1f),
-            ) { Text("Succ. ▶") }
-        }
-
-        // Card parametri live (polyline si aggiornano al volo)
-        PreviewParamsCard(
-            params = params,
-            onSmoothPx = onSmoothPx,
-            onPolishDegree = onPolishDegree,
-            onEngineChange = onEngineChange,
-        )
-
-        // Conferma / annulla
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
-                Text("Annulla")
-            }
+            ) { Text("▶") }
             Button(
                 onClick = onConfirm,
-                modifier = Modifier
-                    .weight(2f)
-                    .height(48.dp),
+                modifier = Modifier.weight(1f).height(44.dp),
             ) { Text("Processa tutto") }
         }
-        Text(
-            "Trascina i 4 cerchi rossi per il crop. Le polyline azzurre mostrano dove l'engine rilevera' le righe; muovi gli slider e guarda come cambiano in tempo reale.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+
+        // Controlli secondari: collassabili
+        if (controlsVisible) {
+            FilledTonalButton(
+                onClick = onResetCorners,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Reset crop a auto-detect") }
+
+            PreviewParamsCard(
+                params = params,
+                onSmoothPx = onSmoothPx,
+                onPolishDegree = onPolishDegree,
+                onEngineChange = onEngineChange,
+            )
+
+            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                Text("Annulla")
+            }
+            Text(
+                "Trascina i 4 cerchi rossi per il crop. Le polyline azzurre mostrano dove l'engine rilevera' le righe; muovi gli slider per vedere live come cambiano.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

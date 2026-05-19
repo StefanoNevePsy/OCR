@@ -57,8 +57,10 @@ class DewarpParams:
                                          #  residua senza overfittare le micro-variazioni.
                                          #  Grado 2+ tende a oscillare sui residui.
                                          #  0 = polyline pura
-    polyline_descender_thresh: float = 0.35  # tolleranza per scartare descender (g, p, q)
-                                             # come frazione dell'altezza riga
+    polyline_descender_thresh: float = 0.15  # tolleranza per scartare descender (g, p, q)
+                                             # come frazione dell'altezza riga. Era 0.35 ma
+                                             #  con baseline stimata via 30 percentile (non
+                                             #  mediana) un filtro piu' stretto e' affidabile.
     auto_rotate: bool = True             # se True, rileva pagine scansionate a 90 e le ruota
                                          #  prima del deskew (projection profile)
     figure_attenuation: float = 0.15     # 0 = niente warp sulle figure, 1 = warp pieno
@@ -607,8 +609,13 @@ def _extract_baselines(
         valid = ~np.isnan(ys_per_col)
         if valid.sum() < cw * 0.5:
             continue
-        median_y = float(np.median(ys_per_col[valid]))
-        descender_limit = median_y + params.polyline_descender_thresh * ch
+        # Stima della "vera" baseline come percentile basso (30°) anziche' mediana:
+        # la mediana e' tirata in basso dai descender stessi (g, p, q, y) e
+        # produce un descender_limit troppo permissivo. Il 30° percentile e'
+        # ~vicino alla baseline pulita anche se il 10-15% delle colonne ha
+        # descender, perche' i descender sono il "top" dei valori y per colonna.
+        baseline_est = float(np.percentile(ys_per_col[valid], 30))
+        descender_limit = baseline_est + params.polyline_descender_thresh * ch
         outliers = valid & (ys_per_col > descender_limit)
         ys_per_col[outliers] = np.nan
 

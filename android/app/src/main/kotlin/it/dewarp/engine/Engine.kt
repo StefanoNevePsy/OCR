@@ -602,12 +602,13 @@ object Engine {
                 if (lastRow[col] >= 0) ysCol[col] = (y + lastRow[col]).toDouble()
             }
 
-            // Filtra descender: scarta colonne dove baseline > median + thresh*ch
+            // Stima baseline via 30 percentile (non mediana): la mediana e' tirata
+            // in basso dai descender, e produce un descender_limit troppo permissivo.
             val valid = ysCol.filter { !it.isNaN() }
             if (valid.size < cw * 0.5) continue
             val sorted = valid.sorted()
-            val median = sorted[sorted.size / 2]
-            val limit = median + params.polylineDescenderThresh * ch
+            val baselineEst = sorted[(sorted.size * 30 / 100).coerceIn(0, sorted.size - 1)]
+            val limit = baselineEst + params.polylineDescenderThresh * ch
             for (col in 0 until cw) {
                 if (!ysCol[col].isNaN() && ysCol[col] > limit) ysCol[col] = Double.NaN
             }
