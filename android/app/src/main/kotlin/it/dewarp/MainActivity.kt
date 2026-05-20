@@ -23,8 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.UnfoldLess
-import androidx.compose.material.icons.outlined.UnfoldMore
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
@@ -423,6 +422,7 @@ private fun PreviewBuildingStage(s: ScreenState.PreviewBuilding) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PreviewStage(
     state: ScreenState.Preview,
@@ -440,10 +440,10 @@ private fun PreviewStage(
     if (state.pages.isEmpty()) return
     val page = state.pages[state.currentIndex]
 
-    // Toggle dei controlli (utile quando si lavora zoomato e si vuole massimizzare
-    // lo spazio per la pagina). Quando nascosti, restano comunque visibili
-    // header + navigazione minimale + un tasto "Processa".
-    var controlsVisible by remember { mutableStateOf(true) }
+    // Bottom sheet con tutti i controlli. Viene aperto dal FAB sovrapposto
+    // alla pagina (sempre visibile mentre si scrolla / zooma), cosi' non serve
+    // andare a cercare comandi fuori dall'anteprima.
+    var sheetOpen by remember { mutableStateOf(false) }
 
     val firstRun = remember { mutableStateOf(true) }
     LaunchedEffect(params.engine, params.polylineSmoothPx, params.polylinePolishDegree, state.currentIndex) {
@@ -452,8 +452,7 @@ private fun PreviewStage(
         onParamsChanged()
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // Header: numero pagina + n. righe + toggle controlli (SEMPRE visibile)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "Pagina ${state.currentIndex + 1} / ${state.pages.size}",
@@ -464,17 +463,10 @@ private fun PreviewStage(
                 "${page.baselines.size} righe",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 8.dp),
             )
-            IconButton(onClick = { controlsVisible = !controlsVisible }) {
-                Icon(
-                    if (controlsVisible) Icons.Outlined.UnfoldLess else Icons.Outlined.UnfoldMore,
-                    contentDescription = if (controlsVisible) "Nascondi controlli" else "Mostra controlli",
-                )
-            }
         }
 
-        // Anteprima pagina (sempre visibile, prende piu' spazio quando i controlli sono nascosti)
+        // Anteprima pagina + FAB sovrapposto
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -491,46 +483,86 @@ private fun PreviewStage(
                 onCornerDrag = onCornerDrag,
                 modifier = Modifier.matchParentSize(),
             )
-        }
-
-        // Navigazione + Processa: sempre visibile (la cosa che serve sempre)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(
-                onClick = { onIndexChange((state.currentIndex - 1).coerceAtLeast(0)) },
-                enabled = state.currentIndex > 0,
-            ) { Text("◀") }
-            FilledTonalButton(
-                onClick = { onIndexChange((state.currentIndex + 1).coerceAtMost(state.pages.size - 1)) },
-                enabled = state.currentIndex < state.pages.size - 1,
-            ) { Text("▶") }
-            Button(
-                onClick = onConfirm,
-                modifier = Modifier.weight(1f).height(44.dp),
-            ) { Text("Processa tutto") }
-        }
-
-        // Controlli secondari: collassabili
-        if (controlsVisible) {
-            FilledTonalButton(
-                onClick = onResetCorners,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Reset crop a auto-detect") }
-
-            PreviewParamsCard(
-                params = params,
-                onSmoothPx = onSmoothPx,
-                onPolishDegree = onPolishDegree,
-                onEngineChange = onEngineChange,
-            )
-
-            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-                Text("Annulla")
+            // FAB in basso a destra dell'anteprima: apre la tendina dei comandi
+            FloatingActionButton(
+                onClick = { sheetOpen = true },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp),
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ) {
+                Icon(Icons.Outlined.Tune, contentDescription = "Apri controlli")
             }
-            Text(
-                "Trascina i 4 cerchi rossi per il crop. Le polyline azzurre mostrano dove l'engine rilevera' le righe; muovi gli slider per vedere live come cambiano.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        }
+    }
+
+    if (sheetOpen) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { sheetOpen = false },
+            sheetState = sheetState,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    "Pagina ${state.currentIndex + 1} / ${state.pages.size}",
+                    style = MaterialTheme.typography.titleLarge,
+                )
+
+                // Navigazione tra pagine
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(
+                        onClick = { onIndexChange((state.currentIndex - 1).coerceAtLeast(0)) },
+                        enabled = state.currentIndex > 0,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("◀ Precedente") }
+                    FilledTonalButton(
+                        onClick = { onIndexChange((state.currentIndex + 1).coerceAtMost(state.pages.size - 1)) },
+                        enabled = state.currentIndex < state.pages.size - 1,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Successiva ▶") }
+                }
+                FilledTonalButton(
+                    onClick = onResetCorners,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Reset crop a auto-detect") }
+
+                // Card parametri live
+                PreviewParamsCard(
+                    params = params,
+                    onSmoothPx = onSmoothPx,
+                    onPolishDegree = onPolishDegree,
+                    onEngineChange = onEngineChange,
+                )
+
+                // Conferma / Annulla
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        sheetOpen = false
+                        onCancel()
+                    }, modifier = Modifier.weight(1f)) {
+                        Text("Annulla")
+                    }
+                    Button(
+                        onClick = {
+                            sheetOpen = false
+                            onConfirm()
+                        },
+                        modifier = Modifier.weight(2f).height(48.dp),
+                    ) { Text("Processa tutto") }
+                }
+                Text(
+                    "Trascina i 4 cerchi rossi per il crop. Le polyline azzurre sono le righe rilevate; cambia gli slider per vedere live come cambiano.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

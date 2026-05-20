@@ -601,17 +601,26 @@ def _extract_baselines(
         # locale e' bassa), gli accenti/punti isolati non confondono (la finestra
         # include il corpo che scende fino a baseline).
         ink = (roi_bin > 0).astype(np.float32)
+        # Scarta colonne "tutto-pieno" (probabili bordi scuri della pagina, linee
+        # decorative continue): se la colonna ha inchiostro per >80% delle righe
+        # del bbox, non e' testo, e' un artefatto verticale.
+        col_fill = ink.mean(axis=0)
+        col_is_border = col_fill > 0.80
+        # Anche colonne dove l'inchiostro e' SOLO nella meta' inferiore: probabile
+        # descender di una riga adiacente catturato dentro questa componente
+        col_only_bottom = (ink[:ch // 2, :].max(axis=0) < 0.05) & (col_fill > 0.05)
+        bad_cols = col_is_border | col_only_bottom
+        ink[:, bad_cols] = 0.0
+
         kernel_w = max(20, 2 * ch)
         density = cv2.blur(ink, (kernel_w, 1))  # shape (ch, cw)
         max_per_col = density.max(axis=0)
-        # Soglie colonna per colonna; evitiamo divisione per zero su colonne senza inchiostro vicino
         thr_per_col = 0.5 * max_per_col
         above = density >= thr_per_col[None, :]
-        # Per ogni colonna, ultima riga (y maggiore) dove above e' True
         flipped = above[::-1, :]
         rev_first = flipped.argmax(axis=0)
         last_above = (ch - 1) - rev_first
-        col_any = above.any(axis=0) & (max_per_col > 1e-6)
+        col_any = above.any(axis=0) & (max_per_col > 1e-6) & ~bad_cols
         ys_per_col = np.full(cw, np.nan, dtype=np.float64)
         ys_per_col[col_any] = y + last_above[col_any].astype(np.float64)
 

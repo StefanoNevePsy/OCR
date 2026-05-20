@@ -209,3 +209,51 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: dist/*
           fail_on_unmatched_files: false
+
+  # ----------------------------------------------------------------------- #
+  release-nightly:
+    # Pubblica/aggiorna una pre-release pubblica "rolling" su ogni push di
+    # branch (non tag). Comodo per scaricare l'APK direttamente dal browser
+    # del tablet, senza login GitHub. Il tag e' costruito dal nome del branch
+    # sanitizzato, cosi' ogni branch ha la sua release indipendente che si
+    # sovrascrive a ogni push.
+    name: Nightly Release
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          pattern: dewarp-*
+          merge-multiple: true
+
+      - name: Compute tag name
+        id: tag
+        run: |
+          # Sanitizza il branch name a un tag valido: solo a-z0-9-_
+          BR=$(echo "${GITHUB_REF_NAME}" | tr '/' '-' | tr -c 'a-zA-Z0-9-_\n' '-')
+          echo "tag=nightly-${BR}" >> "$GITHUB_OUTPUT"
+          echo "title=Nightly · ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: List collected files
+        run: ls -la dist/ || true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.title }}
+          body: |
+            Build automatica del branch `${{ github.ref_name }}` al commit `${{ github.sha }}`.
+
+            APK Android firmato con la keystore stabile del repo: installabile
+            come update sopra le versioni precedenti senza disinstallare.
+
+            Questo tag si aggiorna a ogni push del branch.
+          draft: false
+          prerelease: true
+          make_latest: false
+          files: dist/*
+          fail_on_unmatched_files: false

@@ -581,13 +581,31 @@ object Engine {
             // Inchiostro nella ROI: maschera 8U (255 = pixel della componente i e nero su binary)
             val inkBytes = ByteArray(cw * ch)
             val hasInkPerCol = BooleanArray(cw)
+            val inkRowCount = IntArray(cw)              // n. righe con inchiostro per colonna
+            val upperHalfHasInk = BooleanArray(cw)      // inchiostro presente nella meta' superiore
+            val halfCh = ch / 2
             for (row in 0 until ch) {
                 val base = row * cw
                 for (col in 0 until cw) {
                     if (labelFlat[base + col] == i && binFlat[base + col].toInt() != 0) {
                         inkBytes[base + col] = 255.toByte()
                         hasInkPerCol[col] = true
+                        inkRowCount[col]++
+                        if (row < halfCh) upperHalfHasInk[col] = true
                     }
+                }
+            }
+            // Scarta colonne "tutto-pieno" (bordi scuri della pagina, linee continue):
+            // se la colonna ha inchiostro per >80% delle righe, e' un artefatto verticale.
+            // E scarta colonne dove l'inchiostro e' solo nella meta' inferiore (descender
+            // di riga adiacente catturato dentro la componente per chiusura morfologica).
+            val badCol = BooleanArray(cw)
+            for (col in 0 until cw) {
+                if (inkRowCount[col].toDouble() / ch > 0.80) badCol[col] = true
+                if (!upperHalfHasInk[col] && inkRowCount[col].toDouble() / ch > 0.05) badCol[col] = true
+                if (badCol[col]) {
+                    // azzera la colonna in inkBytes
+                    for (row in 0 until ch) inkBytes[row * cw + col] = 0
                 }
             }
             // Filtro is-text-line: transizioni 0<->ink lungo x (graffi/specks ne hanno poche)
@@ -623,6 +641,7 @@ object Engine {
             }
             val ysCol = DoubleArray(cw) { Double.NaN }
             for (col in 0 until cw) {
+                if (badCol[col]) continue
                 val mx = maxPerCol[col]
                 if (mx <= 1e-6f) continue
                 val thr = 0.5f * mx
