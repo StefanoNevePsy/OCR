@@ -601,15 +601,22 @@ def _extract_baselines(
         # locale e' bassa), gli accenti/punti isolati non confondono (la finestra
         # include il corpo che scende fino a baseline).
         ink = (roi_bin > 0).astype(np.float32)
-        # Scarta colonne "tutto-pieno" (probabili bordi scuri della pagina, linee
-        # decorative continue): se la colonna ha inchiostro per >80% delle righe
-        # del bbox, non e' testo, e' un artefatto verticale.
         col_fill = ink.mean(axis=0)
-        col_is_border = col_fill > 0.80
-        # Anche colonne dove l'inchiostro e' SOLO nella meta' inferiore: probabile
-        # descender di una riga adiacente catturato dentro questa componente
+        # 1) Colonne troppo piene: bordi/linee verticali continui. Soglia 0.60
+        #    (era 0.80) per catturare gradienti sfumati del bordo scanner.
+        col_is_border = col_fill > 0.60
+        # 2) Colonne con inchiostro SOLO nella meta' inferiore: probabile descender
+        #    di riga adiacente catturato per chiusura morfologica.
         col_only_bottom = (ink[:ch // 2, :].max(axis=0) < 0.05) & (col_fill > 0.05)
-        bad_cols = col_is_border | col_only_bottom
+        # 3) Colonne in cui l'inchiostro e' distribuito su >50% delle righe e
+        #    in modo "ininterrotto" (poco contrasto verticale): segno di bordo
+        #    continuo, non di lettere. Misura: gap pieno = pochi cambi 0/1
+        #    nel profilo verticale della colonna.
+        with np.errstate(invalid="ignore"):
+            ink_int = (ink > 0).astype(np.int8)
+            v_changes = np.abs(np.diff(ink_int, axis=0)).sum(axis=0)  # (cw,)
+        col_is_solid = (col_fill > 0.50) & (v_changes < 4)
+        bad_cols = col_is_border | col_only_bottom | col_is_solid
         ink[:, bad_cols] = 0.0
 
         kernel_w = max(20, 2 * ch)

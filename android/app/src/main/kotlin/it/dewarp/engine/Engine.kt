@@ -112,13 +112,16 @@ object Engine {
     )
 
     private fun orderQuad(pts: Array<DoubleArray>): Array<DoubleArray> {
+        // Stesso schema di Python _order_quad: diff = y - x (NB: np.diff(pts, axis=1)
+        // produce y-x, non x-y). Se invertito, i corner TR e BL si scambiano e
+        // applyPageCrop applica una matrice equivalente a una rotazione di 90 deg.
         val s = pts.map { it[0] + it[1] }
-        val diff = pts.map { it[0] - it[1] }
+        val diff = pts.map { it[1] - it[0] }
         return arrayOf(
-            pts[s.indexOf(s.min())],     // TL: somma min
-            pts[diff.indexOf(diff.min())],  // TR: x-y min (forte x positiva, y neg)
-            pts[s.indexOf(s.max())],     // BR: somma max
-            pts[diff.indexOf(diff.max())],  // BL: x-y max
+            pts[s.indexOf(s.min())],         // TL: somma minima (0+0)
+            pts[diff.indexOf(diff.min())],   // TR: y-x minima (0-w = -w)
+            pts[s.indexOf(s.max())],         // BR: somma massima (w+h)
+            pts[diff.indexOf(diff.max())],   // BL: y-x massima (h-0 = h)
         )
     }
 
@@ -595,18 +598,29 @@ object Engine {
                     }
                 }
             }
-            // Scarta colonne "tutto-pieno" (bordi scuri della pagina, linee continue):
-            // se la colonna ha inchiostro per >80% delle righe, e' un artefatto verticale.
-            // E scarta colonne dove l'inchiostro e' solo nella meta' inferiore (descender
-            // di riga adiacente catturato dentro la componente per chiusura morfologica).
+            // Scarta colonne "non-text":
+            //  1) inchiostro > 60% delle righe: bordo verticale, linea decorativa
+            //  2) inchiostro solo nella meta' inferiore: descender di riga adiacente
+            //  3) inchiostro > 50% delle righe ma con pochissimi cambi 0/1 nel
+            //     profilo verticale: e' un bordo "solido" continuo (gradient scuro),
+            //     non lettere che alternano inchiostro/sfondo
+            val verticalChanges = IntArray(cw)
+            for (col in 0 until cw) {
+                var prevInk = false; var changes = 0
+                for (row in 0 until ch) {
+                    val cur = inkBytes[row * cw + col].toInt() != 0
+                    if (row > 0 && cur != prevInk) changes++
+                    prevInk = cur
+                }
+                verticalChanges[col] = changes
+            }
             val badCol = BooleanArray(cw)
             for (col in 0 until cw) {
-                if (inkRowCount[col].toDouble() / ch > 0.80) badCol[col] = true
-                if (!upperHalfHasInk[col] && inkRowCount[col].toDouble() / ch > 0.05) badCol[col] = true
-                if (badCol[col]) {
-                    // azzera la colonna in inkBytes
-                    for (row in 0 until ch) inkBytes[row * cw + col] = 0
-                }
+                val fillFrac = inkRowCount[col].toDouble() / ch
+                if (fillFrac > 0.60) badCol[col] = true
+                else if (!upperHalfHasInk[col] && fillFrac > 0.05) badCol[col] = true
+                else if (fillFrac > 0.50 && verticalChanges[col] < 4) badCol[col] = true
+                if (badCol[col]) for (row in 0 until ch) inkBytes[row * cw + col] = 0
             }
             // Filtro is-text-line: transizioni 0<->ink lungo x (graffi/specks ne hanno poche)
             var transitions = 0; var prev = false

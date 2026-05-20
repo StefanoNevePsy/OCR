@@ -93,6 +93,9 @@ fun DewarpApp(initialUri: Uri?, vm: DewarpViewModel = viewModel()) {
     }
 
     val scrollState = rememberScrollState()
+    // Bottom sheet pilotato dal FAB ancorato alla viewport (sotto in Box).
+    var previewSheetOpen by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -131,6 +134,8 @@ fun DewarpApp(initialUri: Uri?, vm: DewarpViewModel = viewModel()) {
             is ScreenState.Preview -> PreviewStage(
                 state = s,
                 params = params,
+                sheetOpen = previewSheetOpen,
+                onSheetClose = { previewSheetOpen = false },
                 onIndexChange = { vm.setPreviewIndex(it) },
                 onCornerDrag = { idx, x, y -> vm.updateCorner(s.currentIndex, idx, x, y) },
                 onResetCorners = { vm.resetCornersAuto(s.currentIndex) },
@@ -149,6 +154,21 @@ fun DewarpApp(initialUri: Uri?, vm: DewarpViewModel = viewModel()) {
             is ScreenState.Error -> ErrorStage(s, onReset = { vm.reset() })
         }
     }
+    // FAB ancorato alla VIEWPORT (non scorre con la pagina): visibile solo in
+    // modalita' preview, apre il bottom sheet dei comandi.
+    if (state is ScreenState.Preview) {
+        FloatingActionButton(
+            onClick = { previewSheetOpen = true },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(20.dp),
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+        ) {
+            Icon(Icons.Outlined.Tune, contentDescription = "Apri controlli")
+        }
+    }
+    }  // chiusura Box
 }
 
 @Composable
@@ -427,6 +447,8 @@ private fun PreviewBuildingStage(s: ScreenState.PreviewBuilding) {
 private fun PreviewStage(
     state: ScreenState.Preview,
     params: it.dewarp.engine.DewarpParams,
+    sheetOpen: Boolean,
+    onSheetClose: () -> Unit,
     onIndexChange: (Int) -> Unit,
     onCornerDrag: (cornerIdx: Int, x: Float, y: Float) -> Unit,
     onResetCorners: () -> Unit,
@@ -439,11 +461,6 @@ private fun PreviewStage(
 ) {
     if (state.pages.isEmpty()) return
     val page = state.pages[state.currentIndex]
-
-    // Bottom sheet con tutti i controlli. Viene aperto dal FAB sovrapposto
-    // alla pagina (sempre visibile mentre si scrolla / zooma), cosi' non serve
-    // andare a cercare comandi fuori dall'anteprima.
-    var sheetOpen by remember { mutableStateOf(false) }
 
     val firstRun = remember { mutableStateOf(true) }
     LaunchedEffect(params.engine, params.polylineSmoothPx, params.polylinePolishDegree, state.currentIndex) {
@@ -483,24 +500,13 @@ private fun PreviewStage(
                 onCornerDrag = onCornerDrag,
                 modifier = Modifier.matchParentSize(),
             )
-            // FAB in basso a destra dell'anteprima: apre la tendina dei comandi
-            FloatingActionButton(
-                onClick = { sheetOpen = true },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(12.dp),
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-            ) {
-                Icon(Icons.Outlined.Tune, contentDescription = "Apri controlli")
-            }
         }
     }
 
     if (sheetOpen) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
-            onDismissRequest = { sheetOpen = false },
+            onDismissRequest = onSheetClose,
             sheetState = sheetState,
         ) {
             Column(
@@ -544,14 +550,14 @@ private fun PreviewStage(
                 // Conferma / Annulla
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = {
-                        sheetOpen = false
+                        onSheetClose()
                         onCancel()
                     }, modifier = Modifier.weight(1f)) {
                         Text("Annulla")
                     }
                     Button(
                         onClick = {
-                            sheetOpen = false
+                            onSheetClose()
                             onConfirm()
                         },
                         modifier = Modifier.weight(2f).height(48.dp),
