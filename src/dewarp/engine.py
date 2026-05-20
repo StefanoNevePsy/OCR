@@ -593,19 +593,31 @@ def _extract_baselines(
         if not _is_text_line_component(roi_bin, cw, params):
             continue
 
-        # baseline[col] = riga piu' bassa che ha inchiostro
-        ys_per_col = np.full(cw, np.nan, dtype=np.float64)
-        has_ink = roi_bin > 0
-        col_any = has_ink.any(axis=0)
-        # indice riga piu' basso per ogni colonna con inchiostro
-        # (argmax dal basso su flip)
-        flipped = has_ink[::-1, :]
+        # Baseline detection via "horizontal density blur + threshold".
+        # Per ogni colonna prendiamo l'ultima riga dove la densita' di inchiostro
+        # in una finestra orizzontale di ~2*ch supera il 50% del massimo locale.
+        # Robustezza: gli spazi tra parole non producono spike (la finestra prende
+        # le lettere vicine), i descender non vengono catturati (la loro densita'
+        # locale e' bassa), gli accenti/punti isolati non confondono (la finestra
+        # include il corpo che scende fino a baseline).
+        ink = (roi_bin > 0).astype(np.float32)
+        kernel_w = max(20, 2 * ch)
+        density = cv2.blur(ink, (kernel_w, 1))  # shape (ch, cw)
+        max_per_col = density.max(axis=0)
+        # Soglie colonna per colonna; evitiamo divisione per zero su colonne senza inchiostro vicino
+        thr_per_col = 0.5 * max_per_col
+        above = density >= thr_per_col[None, :]
+        # Per ogni colonna, ultima riga (y maggiore) dove above e' True
+        flipped = above[::-1, :]
         rev_first = flipped.argmax(axis=0)
-        last_row = (ch - 1) - rev_first  # in coordinate locali della ROI
-        ys_per_col[col_any] = y + last_row[col_any].astype(np.float64)
+        last_above = (ch - 1) - rev_first
+        col_any = above.any(axis=0) & (max_per_col > 1e-6)
+        ys_per_col = np.full(cw, np.nan, dtype=np.float64)
+        ys_per_col[col_any] = y + last_above[col_any].astype(np.float64)
 
-        # Filtra descender: scarta colonne dove la baseline locale scende sotto
-        # la mediana di una quantita' significativa.
+        # Filtra descender residui: anche con la density-based detection, in casi
+        # estremi (riga con MOLTI descender ravvicinati) la finestra puo' includerli;
+        # il filtro al 30 percentile + tolleranza stretta agisce da rete di sicurezza.
         valid = ~np.isnan(ys_per_col)
         if valid.sum() < cw * 0.5:
             continue

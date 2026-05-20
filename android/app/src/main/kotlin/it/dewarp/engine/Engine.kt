@@ -578,28 +578,59 @@ object Engine {
             val labelFlat = IntArray(cw * ch); labelROI.get(0, 0, labelFlat); labelROI.release()
             val binFlat = ByteArray(cw * ch); binROI.get(0, 0, binFlat); binROI.release()
 
-            // Per ogni colonna: ultima riga con inchiostro (label==i AND bin!=0)
-            val lastRow = IntArray(cw) { -1 }
+            // Inchiostro nella ROI: maschera 8U (255 = pixel della componente i e nero su binary)
+            val inkBytes = ByteArray(cw * ch)
+            val hasInkPerCol = BooleanArray(cw)
             for (row in 0 until ch) {
                 val base = row * cw
                 for (col in 0 until cw) {
                     if (labelFlat[base + col] == i && binFlat[base + col].toInt() != 0) {
-                        lastRow[col] = row
+                        inkBytes[base + col] = 255.toByte()
+                        hasInkPerCol[col] = true
                     }
                 }
             }
-            // Filtro is-text-line: contare le transizioni 0<->ink lungo x
+            // Filtro is-text-line: transizioni 0<->ink lungo x (graffi/specks ne hanno poche)
             var transitions = 0; var prev = false
             for (col in 0 until cw) {
-                val cur = lastRow[col] >= 0
+                val cur = hasInkPerCol[col]
                 if (col > 0 && cur != prev) transitions++
                 prev = cur
             }
             if (transitions < params.lineMinTransitions) continue
 
+            // Baseline via "horizontal density blur + threshold": per ogni colonna
+            // l'ultima riga dove la densita' di inchiostro in una finestra di ~2*ch
+            // supera il 50% del massimo locale. Robusto a spazi tra parole, descender,
+            // accenti, punteggiatura isolata.
+            val ink8 = Mat(ch, cw, CvType.CV_8U); ink8.put(0, 0, inkBytes)
+            val ink = Mat(); ink8.convertTo(ink, CvType.CV_32F, 1.0 / 255.0); ink8.release()
+            val density = Mat()
+            val kernelW = kotlin.math.max(20, 2 * ch).toDouble()
+            Imgproc.blur(ink, density, Size(kernelW, 1.0))
+            ink.release()
+            val densityArr = FloatArray(cw * ch)
+            density.get(0, 0, densityArr)
+            density.release()
+            val maxPerCol = FloatArray(cw)
+            for (col in 0 until cw) {
+                var mx = 0f
+                for (row in 0 until ch) {
+                    val v = densityArr[row * cw + col]
+                    if (v > mx) mx = v
+                }
+                maxPerCol[col] = mx
+            }
             val ysCol = DoubleArray(cw) { Double.NaN }
             for (col in 0 until cw) {
-                if (lastRow[col] >= 0) ysCol[col] = (y + lastRow[col]).toDouble()
+                val mx = maxPerCol[col]
+                if (mx <= 1e-6f) continue
+                val thr = 0.5f * mx
+                for (row in ch - 1 downTo 0) {
+                    if (densityArr[row * cw + col] >= thr) {
+                        ysCol[col] = (y + row).toDouble(); break
+                    }
+                }
             }
 
             // Stima baseline via 30 percentile (non mediana): la mediana e' tirata
